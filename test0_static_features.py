@@ -5,6 +5,7 @@ import os
 import random
 from matplotlib.animation import FuncAnimation, PillowWriter
 from scipy.spatial import ConvexHull
+import sys
 import matplotlib.pyplot as plt
 import imageio.v2 as imageio
 
@@ -405,6 +406,12 @@ def create_gif_of_car_positions(file_path, laneIds=[4, 5, 6, 7],redConfig=None):
 
 
 # Example usage
+
+# Redirect all print statements to a file
+if 0:
+    log_file_path = "output_log.txt"
+    sys.stdout = open(log_file_path, "w+")
+
 if 0:#生成车道的轨迹图
     file_path = 'E:\myData\IntersectionA-01.csv'
     #extract_traj_data(file_path)
@@ -413,7 +420,7 @@ if 0:#生成车道的轨迹图
     laneIDs = [0,1,2,3,4,5,6,7,8]
     extract_lane_traj_data(file_path,laneId=laneIDs)
 
-if 1:#分析交通图,获得每条车道的红灯时间
+if 1:#分析交通图,获得每条车道的红灯时间或者lane5,6,7车道的红灯时间
     file_path = 'E:\myData\IntersectionA-01.csv'
     #extract_traj_data(file_path)
     

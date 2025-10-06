@@ -169,7 +169,27 @@ def create_gif_of_car_positions(file_path):
     #for image_file in image_files:
     #    os.remove(image_file)
 
-# Example usage
+####################################################################################
+####################################################################################
+##生成用于分析和训练的车道数据样本，数据集
+def gen_samples(input_csv, output_dir,laneIds=[4,5,6],redlightConfig):
+    df = pd.read_csv(input_csv)
+    os.makedirs(output_dir, exist_ok=True)
+    laneIds = df['laneId'].unique()
+    for laneId in laneIds:
+        lane_data = df[df['laneId'] == laneId]
+        lane_file_path = os.path.join(output_dir, f"{laneId}_data.csv")
+        lane_data.to_csv(lane_file_path, index=False)
+        print(f"Data for laneid:{laneId} saved to {lane_file_path}")
+        #1.获得红灯状态而且停车线有车辆时的每一帧数据，以及对应红灯剩余时间
+        #2.根据每一帧数据和对应的红灯剩余时间，获得当前车道每一辆车的位置和速度，并且按照到停止线的距离进行排序
+        #3.根据每一帧数据和对应的红灯剩余时间，获得道路上的所有车辆根据carID搜索整个出现时间的速度变换速度（如最大速度，平均速度，最小速度）
+        #还包括最大加速度、最小加速度、经过停止线的时间以及与前车的距离，与前车的距离变化率。以及红灯变绿灯后，每一辆车的起步时间和起步加速度
+        #还包括每辆车经过停止线的时间，前车经过停止线的时间和后车经过停止线的时间以及之间的时间差。
+        #4.计算红灯变绿灯后，根据每辆车经过停止线的时间，前车经过停止线的时间和后车经过停止线的时间以及之间的时间差。
+        # 加上车辆的位置和速度，进行多维高斯或者log建模对排队车辆进行过停止线的时间进行预测
+        #5.根据车辆的位置和速度，本车道的历史数据和前5秒的速度，基于跟车动态模型，预测每辆车从开始位置到停止线的所有状态信息，以及停止线的时间进行预测
+        #6.结合神经网络模型、概率参数模型、跟车动态模型，综合提高预测的结果的正确性   
 
 
 
@@ -178,6 +198,8 @@ if 0:
     file_path = 'E:\myData\IntersectionA-01.csv'
     output_dir = 'E:\myData\IntersectionA-01-output'
     extract_laneid_data(file_path, output_dir)
+
+    
 if 0:
     file_path = 'E:\\myData\\IntersectionA-01-output\\4_data.csv'  # Replace with the path to your CSV file
     analyze_and_plot_lane_data(file_path)
