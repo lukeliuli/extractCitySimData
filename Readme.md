@@ -12,6 +12,14 @@
 - **extract_lane_traj_data**:提取指定车道的车辆轨迹数据，并为每个车道绘制车辆中心点的分布图。
 - **extract_one_lane_redlight_data**:分析特定车道的车辆数据，提取满足速度和距离条件的车辆停留时间（红灯时间）。
 - **create_gif_of_car_positions**:根据车辆轨迹数据生成多帧图像，并将其合成为GIF，用于动态展示车辆在车道上的位置变化。
+- 
+#### tes1.py 中所有函数的简要功能解释：
+- **extract_laneid_data**:读取CSV文件并提取,根据ID特定道路的数据。
+- **gen_samples**:
+        - 1.获得红灯状态而且停车线有车辆时的每一帧数据，以及对应红灯剩余时间
+        - 2.根据每一帧数据和对应的红灯剩余时间，获得当前车道每一辆车的位置和速度，并且按照到停止线的距离进行排序
+        - 3.根据frameNum和laneID，生成一个记录，获得道路上的所有车辆根据carID,搜索和计算一下特征
+        - 4.计算绿灯持续时间，并在绿灯期间计算每辆车经过停止线的时间及相关信息，并排序GIT
   
 ## 基本信息
     - 数据在 https://github.com/UCF-SST-Lab/UCF-SST-CitySim1-Dataset
