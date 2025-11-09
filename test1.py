@@ -239,9 +239,9 @@ def gen_samples(input_csv,output_dir,laneIds,redlightConfig,start_of_lane_coords
 
             # Limit to 20 cars, pad with zeros if fewer
             max_cars = 20
-            car_ids = car_ids[:max_cars] + [0] * (max_cars - len(car_ids))
-            car_positions = car_positions[:max_cars] + [[0, 0]] * (max_cars - len(car_positions))
-            car_speeds = car_speeds[:max_cars] + [0] * (max_cars - len(car_speeds))
+            car_ids = car_ids[:max_cars] + [-1] * (max_cars - len(car_ids))
+            car_positions = car_positions[:max_cars] + [[-1, -1]] * (max_cars - len(car_positions))
+            car_speeds = car_speeds[:max_cars] + [-1] * (max_cars - len(car_speeds))
 
             # Create a record for the current frame
             record = {
@@ -417,3 +417,51 @@ if 1:
 
     laneIds=[5,6,7]
     gen_samples(input_csv,output_dir,laneIds,redlightConfigNow,start_of_lane_coordsNow,end_of_lane_coordsNow)
+    '''
+#### test1的数据结果和输出文件的数据结构
+- 车道的开始和结束坐标
+    ~~~
+     start_of_lane_coordsNow = {
+        5: (101, 1302),
+        6: (100, 1410),
+        7: (95, 1498)
+    }
+    end_of_lane_coordsNow = {
+        5: (1261, 1302),
+        6: (1263, 1372),
+        7: (1267, 1469)
+    }
+    ~~~
+  
+-   lane_5_frame_0_queue_data.csv的格式
+    ~~~
+    record = {
+            'frameNum': frame,
+            'redLightRemainingTime': red_light_remaining_time[frame],
+            'carIds': car_ids,
+            'carPositions': car_positions,
+            'carSpeeds': car_speeds
+            }
+    ~~~
+- lane_5_car_features.csv的格式
+    ~~~
+    'carId': car_id,
+    'maxSpeed': max_speed,
+    'minSpeed': min_speed,
+    'avgSpeed': avg_speed,
+    'maxAcceleration': max_acceleration,
+    'minAcceleration': min_acceleration,
+    'crossingFrame1': crossing_frame1 if not np.isnan(crossing_frame1) else None,
+    'crossingFrame2_vanish': crossing_frame2_vanish     
+    ~~~ 
+- lane_5_green_light_data.csv的格式
+    ~~~
+    'carId': car_id,
+    'greenStartFrame': green_start,
+    'crossingFrame': crossing_frame if not np.isnan(crossing_frame) else None,
+    'initialPositionX': initial_position[0],
+    'initialPositionY': initial_position[1],
+    'initialSpeed': initial_speed
+    ~~~
+ 
+    '''    

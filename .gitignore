@@ -212,3 +212,5 @@ gifs/
 trajs/
 
 *.pt
+*.csv
+*.pkl
