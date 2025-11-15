@@ -251,4 +251,6 @@ if __name__ == "__main__":
     }
     lane_data_path = "../../myData/IntersectionA-01-trainsamples"
     #prepare_data(lane_data_path,start_of_lane_coordsNow,end_of_lane_coordsNow)
-    train_and_evaluate_model(unit=256,layNum=30,batch_size=640*5,epochs=10)
+    train_and_evaluate_model(unit=32,layNum=10,batch_size=640*20,epochs=500)#就trainsamples_lane_5_6_7.csv结论太好
+                                                                            #不需要太好模型
+    #train_and_evaluate_model(unit=256,layNum=30,batch_size=640*20,epochs=500)
