@@ -16,7 +16,7 @@
 - 
 #### tes1.py 中所有函数的简要功能解释：
 - **extract_laneid_data**:读取CSV文件并提取,根据ID特定道路的数据。
-- **gen_samples**:
+- **gen_samples**:  
         - 1.获得红灯状态而且停车线有车辆时的每一帧数据，以及对应红灯剩余时间
         - 2.根据每一帧数据和对应的红灯剩余时间，获得当前车道每一辆车的位置和速度，并且按照到停止线的距离进行排序
         - 3.根据frameNum和laneID，生成一个记录，获得道路上的所有车辆根据carID,搜索和计算一下特征
@@ -28,8 +28,8 @@
 
 #### modelCollect 中所有函数的简要功能解释：
 - **model_simpleResnet0** 与test2的train_and_evaluate_model一样，采用最简单的resnet进行训练和评估被test2调用进行训练的评估。
--**model_with_MCDDropout**与test2的train_and_evaluate_model一样，采用最简单的MCDrop进行随机采样的进行训练和评估被test2调用进行训练的评估。
--**#model_with_ensemble**与test2的train_and_evaluate_model一样，采用集成模型的进行多模型采样的进行训练和评估被test2调用进行训练的评估。
+- **model_with_MCDDropout** 与test2的train_and_evaluate_model一样，采用最简单的MCDrop进行随机采样的进行训练和评估被test2调用进行训练的评估。
+- **#model_with_ensemble** 与test2的train_and_evaluate_model一样，采用集成模型的进行多模型采样的进行训练和评估被test2调用进行训练的评估。
 
 ## 基本信息
     - 数据在 https://github.com/UCF-SST-Lab/UCF-SST-CitySim1-Dataset
