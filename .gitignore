@@ -210,7 +210,7 @@ frames/
 framesTmp/
 gifs/
 trajs/
-
+simulation_frames/
 *.pt
 *.csv
 *.pkl
