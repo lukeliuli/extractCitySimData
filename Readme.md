@@ -21,7 +21,16 @@
         - 2.根据每一帧数据和对应的红灯剩余时间，获得当前车道每一辆车的位置和速度，并且按照到停止线的距离进行排序
         - 3.根据frameNum和laneID，生成一个记录，获得道路上的所有车辆根据carID,搜索和计算一下特征
         - 4.计算绿灯持续时间，并在绿灯期间计算每辆车经过停止线的时间及相关信息，并排序GIT
-  
+        - 
+#### tes2.py 中所有函数的简要功能解释：
+- **prepare_data**:IntersectionA-01-trainsamples读入每个车道每帧的类似的数据，并筛选特征和形成训练数据
+- **train_and_evaluate_model**:根据形成的训练数据，采用最简单的resnet进行训练和评估
+
+#### modelCollect 中所有函数的简要功能解释：
+- **model_simpleResnet0** 与test2的train_and_evaluate_model一样，采用最简单的resnet进行训练和评估被test2调用进行训练的评估。
+-**model_with_MCDDropout**与test2的train_and_evaluate_model一样，采用最简单的MCDrop进行随机采样的进行训练和评估被test2调用进行训练的评估。
+-**#model_with_ensemble**与test2的train_and_evaluate_model一样，采用集成模型的进行多模型采样的进行训练和评估被test2调用进行训练的评估。
+
 ## 基本信息
     - 数据在 https://github.com/UCF-SST-Lab/UCF-SST-CitySim1-Dataset
     - 数据CSV格式在 https://github.com/UCF-SST-Lab/UCF-SST-CitySim1-Dataset/wiki
