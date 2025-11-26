@@ -340,9 +340,107 @@ def model_simpleResnet0(unit=256, layNum=10, batch_size=64, epochs=50,test_size=
 ##训练是损失函数同时包括与真实结果误差和与物理仿真模型预测结果的误差
 ##进一步根据仿真结果给出结果分布概率，预测进行蒙特卡洛仿真，并对仿真结果和结果分布概率进行加权融合校正（后期加入后验证概率校准的理论和方法）
 ##看能不能用AI编写一个跟车小有小车的控制器，进行跟车控制
+from pyGameInterface2 import TrafficSimulator, VehicleParams
 
+def model_with_SimulCal_SimpleResnet(unit=256, layNum=10, batch_size=64, epochs=50, test_size=0.9,simNum=1000):
+    df = pd.read_csv('trainsamples_lane_5_6_7.csv')
+
+    # Prepare the data
+    features = df.drop(columns=['carID', 'lane', 'frameNum', 'time_to_vanish', 'min_speed']).values
+    targets = df[['time_to_vanish']].copy()
+    targets['time_to_vanish'] = targets['time_to_vanish']  # Adjust time_to_vanish by subtracting frameNum，数据准备阶段已经减去当前frameNum
+    targets = targets.values/30  # Normalize targets to minutes assuming 30 FPS
+
+    
+    
+    #1.从df数据集中提取每一个样本，提取所有车辆的位置和速度
+    #从总数为20的car_position和car_speed中，提取相应的位置，速度。如果为-1，表述没有车辆
+    errors = []
+    for index, row in tqdm(df.iterrows(), total=len(df), desc="Processing rows"):
+    #for index, row in df.iterrows():
+        
+        time_to_vanish_sim = []
+        for i in range(simNum):
+            params = VehicleParams()
+            simulator = TrafficSimulator(params, time_step=0.1, intersection_pos=1000.0)
+
+            car_id = row['carID']
+            distance = row['car_position']
+            speed = row['car_speed']
+            redLightRemainingTime = row['redLightRemainingTime']/30
+            landid = row['lane']
+            
+            end_of_lane_coordsNow = {
+            5: (53.04760881,54.77239228),
+            6: (53.13174459,57.71714455),
+            7: (53.30001614,61.79772985)}
+            intersection_pos = end_of_lane_coordsNow[landid][0]  # Use x-coordinate as intersection position
+            simulator.intersection_pos = intersection_pos
+
+            # Add vehicles from the sample
+            for i in range(20):
+                pos_col = f'car_position_{i}'
+                speed_col = f'car_speed_{i}'
+                if pos_col in row and row[pos_col] != -1:
+                # Assuming a unique ID for these other cars is needed for the simulator
+                # Using a large number + index to avoid collision with main carID
+            
+                    other_car_id = 100 + i 
+                    simulator.add_vehicles([
+                        {'id': other_car_id,'distance': row[pos_col],'speed': row[speed_col]}
+                    ])
+                    
+                    if row[pos_col] == distance:
+                        main_car_id = other_car_id  # Identify the main car's ID
+
+            simulator.set_red_light(redLightRemainingTime)
+            #2.运行模拟，记录每次模拟main_car_id的首次has_passed为True时的time,并记录
+            #recordD的数据是time	red_light_remaining	id	distance	speed	acceleration	has_passed	waiting_time
+            
+            
+            recordDF = simulator.run_simulation(max_duration=100)
+                # Find the first occurrence where main_car_id has passed
+            main_car_data = recordDF[recordDF['id'] == main_car_id]
+            passed_data = main_car_data[main_car_data['has_passed'] == True]
+            time_to_vanish = passed_data.iloc[0]['time']  # Get the first time where has_passed is True
+            time_to_vanish_sim.append(time_to_vanish)
+
+                
+            
+      
+        # Calculate the mean of time_to_vanish_list for each sample
+        mean_time_to_vanish_sim = np.mean(time_to_vanish_sim)
+
+        # Compare the mean_time_to_vanish with the target value
+        target_time_to_vanish = targets[index]
+
+        # Calculate the error
+        error = mean_time_to_vanish_sim - target_time_to_vanish
+        
+        print(f"Sample {index}: Simulated Mean Time to Vanish = {mean_time_to_vanish_sim:.2f}, Target = {target_time_to_vanish[0]:.2f}, Error = {error[0]:.2f}")
+        # Store the error for statistical analysis
+        errors.append(error)
+
+        if index>=10:  # For demonstration, limit to first 100 samples
+            break
+
+     # 计算所有样本的误差的均值和方差
+    allSamples_mean_error = np.mean(errors)
+    allSamples_variance_error = np.var(errors)
+
+    print("Mean Error (Simulation - Target):", allSamples_mean_error)
+    print("Variance of Errors:",  allSamples_variance_error)
+      
+
+
+import sys
+from tqdm import tqdm
 if __name__ == "__main__":
+    
+    sys.stdout = open('output.log', 'w', encoding='utf-8') 
+    #model_simpleResnet0(unit=256,layNum=10,batch_size=640*20,epochs=500)
+    #model_with_MCDDropout(unit=256, layNum=10, batch_size=640*20, epochs=500, test_size=0.9, mc_samples=10)
+    #model_with_ensemble(unit=256, layNum=10, batch_size=640*20, epochs=500, test_size=0.9, ensemble_size=5) 
+    model_with_SimulCal_SimpleResnet(unit=256, layNum=10, batch_size=64, epochs=50, test_size=0.9,simNum=10)
 
-    #model_simpleResnet0(unit=256,layNum=30,batch_size=640*20,epochs=500)
-    #model_with_MCDDropout(unit=256, layNum=10, batch_size=64, epochs=50, test_size=0.9, mc_samples=10)
-    #model_with_ensemble(unit=256, layNum=10, batch_size=64, epochs=50, test_size=0.9, ensemble_size=5) 
+  

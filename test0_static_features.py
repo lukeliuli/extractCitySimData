@@ -163,6 +163,159 @@ def extract_lane_traj_data(file_path,laneId=[1,2,3]):
 ######################################################################################
 #提取每条道路的红灯时间，也就是道路终点有车停的时间
 
+#根据数据提取制定laneID道路的开始位置和结束位置，以及车道的方向.
+#1.由feet转换为米 
+# 分析['frameNum', 'carId', 'carCenterXft', 'carCenterYft', 'headXft','headYft','tailXft','tailXft','speed', 'heading','laneId']
+#2. 计算车道的方向
+#3. 计算车道的起点和终点
+#4. 计算每辆车每个时刻距离车道终点的距离
+#5. 计算每辆车在距离车道终点3米内，速度小于1米每秒的时间段
+#6. 计算每辆车在车道内的持续时间
+#7. 计算每辆车在速度小于1米每秒的时间段
+# save all the results to a CSV file
+def extract_one_lane_redlight_dataBymeters(file_path, laneId=1):
+    """
+    从CSV文件中提取并分析特定车道的数据，单位为英尺，并将其转换为米。
+    该函数旨在识别在车道末端附近满足特定速度和距离条件的车辆，并将结果保存到CSV文件中。
+
+    参数:
+    -----------
+    file_path : str
+        包含交通数据的CSV文件路径，数据单位为英尺。
+    laneId : int, optional
+        要分析的车道ID（默认值为1）。
+
+    功能:
+    1. 读取CSV文件并选择相关列。
+    2. 将坐标和速度从英尺/秒转换为米/秒。
+    3. 根据车道中车辆的行驶方向确定车道的起点和终点。
+    4. 计算每辆车到车道终点的距离。
+    5. 筛选出距离车道终点3米以内且速度小于1米/秒的车辆。
+    6. 计算每辆车在车道内的总停留时间。
+    7. 计算每辆车在低速（<1 m/s）状态下的总持续时间。
+    8. 将分析结果（包括车道信息、车辆持续时间、低速持续时间和满足红灯条件的车辆）保存到CSV文件中。
+
+    返回:
+    --------
+  
+    car_durations : pandas.DataFrame
+        一个DataFrame，包含每辆车在车道末端附近满足条件的持续时间（以帧为单位）。
+        包括以下列：
+        - 'min': 车辆首次满足条件的帧号。
+        - 'max': 车辆最后一次满足条件的帧号。
+        - 'duration': 车辆满足条件的总持续时间（以帧为单位）。
+    filtered_vehicles : pandas.DataFrame
+        一个DataFrame，包含满足条件的车辆的详细信息，条件为距离车道末端在阈值范围内，
+        且速度低于指定阈值。包括以下列：
+        - 'frameNum': 帧号。
+        - 'carId': 车辆ID。
+        - 'speed': 车辆速度。
+        - 'distance_to_end': 车辆到车道末端的距离。
+    """
+    # 1. 读取CSV文件并转换单位
+    df = pd.read_csv(file_path)
+    
+    # 选择分析所需的列
+    columns_to_analyze = ['frameNum', 'carId', 'carCenterXft', 'carCenterYft', 
+                          'headXft', 'headYft', 'tailXft', 'tailYft', 
+                          'speed', 'heading', 'laneId']
+    df = df[columns_to_analyze]
+
+    # 按指定的laneId筛选数据
+    lane_data = df[df['laneId'] == laneId].copy()
+    if lane_data.empty:
+        print(f"No data found for laneId {laneId}")
+        return
+
+    # 将英尺转换为米 (1 foot = 0.3048 meters)
+    ft_to_m = 0.3048
+    for col in ['carCenterXft', 'carCenterYft', 'headXft', 'headYft', 'tailXft', 'tailYft']:
+        lane_data[col.replace('ft', '_m')] = lane_data[col] * ft_to_m
+    
+    # 假设速度单位是Miles per Hour，转换为米/秒
+    mph_to_mps = 0.44704
+    lane_data['speed_mps'] = lane_data['speed'] * mph_to_mps
+ 
+
+    # 2. 计算车道方向
+    # 使用第一辆车的数据来确定方向
+    first_vehicle = lane_data.iloc[0]
+    direction_vector = np.array([first_vehicle['headX_m'] - first_vehicle['tailX_m'], 
+                                 first_vehicle['headY_m'] - first_vehicle['tailY_m']])
+    
+    # 3. 计算车道的起点和终点
+    # 根据车流方向确定起点和终点
+    # 我们假设车流方向与坐标轴大致对齐
+    if abs(direction_vector[0]) > abs(direction_vector[1]): # 主要沿X轴移动
+        if direction_vector[0] > 0: # X正方向
+            start_idx = lane_data['carCenterX_m'].idxmin()
+            end_idx = lane_data['carCenterX_m'].idxmax()
+        else: # X负方向
+            start_idx = lane_data['carCenterX_m'].idxmax()
+            end_idx = lane_data['carCenterX_m'].idxmin()
+    else: # 主要沿Y轴移动
+        if direction_vector[1] > 0: # Y正方向
+            start_idx = lane_data['carCenterY_m'].idxmin()
+            end_idx = lane_data['carCenterY_m'].idxmax()
+        else: # Y负方向
+            start_idx = lane_data['carCenterY_m'].idxmax()
+            end_idx = lane_data['carCenterY_m'].idxmin()
+
+    start_of_lane = lane_data.loc[start_idx, ['carCenterX_m', 'carCenterY_m']].values
+    end_of_lane = lane_data.loc[end_idx, ['carCenterX_m', 'carCenterY_m']].values
+
+    # 4. 计算每辆车到车道终点的距离
+    lane_data['distance_to_end_m'] = np.sqrt(
+        (lane_data['carCenterX_m'] - end_of_lane[0])**2 +
+        (lane_data['carCenterY_m'] - end_of_lane[1])**2
+    )
+
+    # 5. 筛选满足满足红灯条件下在红灯附件停止的车辆（也就是头车）
+    red_light_condition = (lane_data['distance_to_end_m'] < 6) & (lane_data['speed_mps'] < 1)
+    red_light_vehicles = lane_data[red_light_condition]
+    red_light_vehicles = red_light_vehicles [['frameNum', 'carId', 'speed_mps', 'distance_to_end_m']]
+    print(f"Lane {laneId} - Vehicles near end with low speed:\n",red_light_vehicles [['frameNum', 'carId', 'speed_mps', 'distance_to_end_m']][:5])
+    print(f"Lane {laneId} - red_light_vehicles carids:",red_light_vehicles['carId'].unique())
+    # 6. 计算满足红灯条件下在红灯附件停止的车辆（也就是头车）,在车道内的持续时间
+    car_total_duration = red_light_vehicles.groupby('carId')['frameNum'].agg(['min', 'max'])
+    car_total_duration['duration_frames'] = car_total_duration['max'] - car_total_duration['min']
+    #car_total_duration.rename(columns={'min': 'entry_frame', 'max': 'exit_frame'}, inplace=True)
+
+    # 7. 计算每辆车低速行驶的时间
+    low_speed_vehicles = lane_data[lane_data['speed_mps'] < 1]
+    low_speed_duration = low_speed_vehicles.groupby('carId').size().reset_index(name='low_speed_frames')
+
+    # 8. 保存每个结果到不同的CSV文件
+    # 虽然下面的代码是保存到Excel的不同sheet，但概念上是分开保存结果
+    output_filename_base = f"lane_{laneId}_analysis_by_meter"
+    
+    # 保存车道信息
+    lane_info_df = pd.DataFrame({
+        'laneId': [laneId],
+        'start_of_lane_m': [str(start_of_lane)],
+        'end_of_lane_m': [str(end_of_lane)]
+    })
+    # lane_data只保存frameNum, carId, carCenterX_m, carCenterY_m, speed_mps, distance_to_end_m,speed
+    columns_to_save = ['frameNum', 'carId', 'carCenterX_m', 'carCenterY_m', 'speed_mps', 'distance_to_end_m', 'speed']
+    lane_data[columns_to_save].to_csv(f"{output_filename_base}_all_data.csv", index=False)
+
+    lane_info_df.to_csv(f"{output_filename_base}_lane_info.csv", index=False)
+
+    # 保存车辆总持续时间
+    car_total_duration.to_csv(f"{output_filename_base}_total_duration.csv")
+
+    # 保存车辆低速持续时间
+    low_speed_duration.to_csv(f"{output_filename_base}_low_speed_duration.csv", index=False)
+
+    # 保存满足红灯条件的车辆帧
+    red_light_vehicles.to_csv(f"{output_filename_base}_red_light_frames.csv", index=False)
+
+    print(f"Analysis files for lane {laneId} saved with base name {output_filename_base}")
+    
+   
+    return car_total_duration,red_light_vehicles
+
+##废弃，因为车辆的位置都是以像素为单位的，重写了一个函数以米作为单位
 def extract_one_lane_redlight_data(file_path, laneId=1):
     """
     从CSV文件中提取并分析特定车道的数据，识别在车道末端附近满足特定速度和距离条件的车辆。
@@ -425,18 +578,19 @@ if 1:#分析交通图,获得每条车道的红灯时间或者lane5,6,7车道的�
     #extract_traj_data(file_path)
     
     #车道0123，没有交通灯，4,5,6,7有交通灯,4是左转向道，5,6,7是直行道
-    laneIDs = [5, 6, 7]
+    laneIDs = [5,6,7]
     combined_redlight_data = []
 
     for laneID in laneIDs:
-        car_durations, filtered_vehicles = extract_one_lane_redlight_data(file_path, laneId=laneID)
+        #car_durations, filtered_vehicles = extract_one_lane_redlight_data(file_path, laneId=laneID)
+        car_durations, filtered_vehicles = extract_one_lane_redlight_dataBymeters(file_path, laneId=laneID)
         combined_redlight_data.append(car_durations)
 
     # Combine red light durations for lanes 5, 6, and 7
     combined_redlight_data = pd.concat(combined_redlight_data)
 
-    print("Combined red light durations for lanes 5, 6, and 7:")
-    print(combined_redlight_data)
+    #print(f"Combined red light durations for lanes{laneIDs}:")
+    #print(combined_redlight_data)
 
 
     combined_redlight_data = combined_redlight_data.groupby('carId').agg({'min': 'min', 'max': 'max'})
@@ -472,7 +626,7 @@ if 1:#分析交通图,获得每条车道的红灯时间或者lane5,6,7车道的�
     print(merged_redlight_data)
     
 
-if 1:#生成车道的轨迹GIF图图
+if 0:#生成车道的轨迹GIF图图
     file_path = 'E:\myData\IntersectionA-01.csv'
     #extract_traj_data(file_path)
     laneIDs = [1,2,3,4,5,6,7,8,9,10,11,12]

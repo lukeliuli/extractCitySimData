@@ -66,7 +66,7 @@ def prepare_data(lane_data_path,start_of_lane_coordsNow,end_of_lane_coordsNow):
                 car_positions2 = np.where(car_positions[:, 0] == -1, -1, end_of_lane_coordsNow[lane][0] - car_positions[:, 0])
                 
                 #根据lane,从类似lane_5_car_features.csv文件读取carid对应的车辆特征，并转换为np.array格式,存在对应的 dict中
-                car_features_file = f"E:/myData/IntersectionA-01-trainsamples/lane_{lane}_car_features.csv"
+                car_features_file = f"IntersectionA-01-trainsamples/lane_{lane}_car_features.csv"
                 car_features_df = pd.read_csv(car_features_file)
                 crossing_frame2_vanish = {}
                 min_speed = {}
@@ -79,7 +79,7 @@ def prepare_data(lane_data_path,start_of_lane_coordsNow,end_of_lane_coordsNow):
                         crossing_frame2_vanish[car_id] = -1  # Default to None if not found
                         min_speed[car_id] = -1
                 
-                car_features_file = f"E:/myData/IntersectionA-01-trainsamples/lane_{lane}_car_features.csv"
+                car_features_file = f"IntersectionA-01-trainsamples/lane_{lane}_car_features.csv"
                 car_features_df = pd.read_csv(car_features_file)
                 laneMaxSpeed = np.percentile(car_features_df['maxSpeed'], 95)  # Use the 95th percentile of maxSpeed as lane max speed
                 laneAvgSpeed = np.percentile(car_features_df['avgSpeed'], 50)  # Use the 60th percentile of maxSpeed as lane max speed
@@ -121,7 +121,7 @@ def prepare_data(lane_data_path,start_of_lane_coordsNow,end_of_lane_coordsNow):
     print("总共提取的训练样本数量:", len(trainsamples))#
     #保存trainsamples到文件
 
-    with open('E:/myCodes/extractCitySIMData/extractCitySimData/trainsamples_lane_5_6_7.pkl', 'wb') as f:
+    with open('trainsamples_lane_5_6_7.pkl', 'wb') as f:
         pickle.dump(trainsamples, f) 
 
     # 转换保存dict类的trainsamples的vector到pandas,并保存为CSV文件
@@ -139,7 +139,7 @@ def prepare_data(lane_data_path,start_of_lane_coordsNow,end_of_lane_coordsNow):
     df = pd.DataFrame(data, columns=header)
 
     # Save DataFrame to CSV
-    df.to_csv('E:/myCodes/extractCitySIMData/extractCitySimData/trainsamples_lane_5_6_7.csv', index=False, encoding='utf-8')
+    df.to_csv('trainsamples_lane_5_6_7.csv', index=False, encoding='utf-8')
 
 #######################################################################################################################################
 
@@ -240,17 +240,19 @@ def train_and_evaluate_model(unit=256, layNum=10, batch_size=64, epochs=50):
 if __name__ == "__main__":
 
     start_of_lane_coordsNow = {
-        5: (101, 1302),
-        6: (100, 1410),
-        7: (95, 1498)
+        5: (4.24885685,55.9082253),
+        6: (4.20678896,59.31572436),
+        7: (3.99644951,63.01769865)
     }
     end_of_lane_coordsNow = {
-        5: (1261, 1302),
-        6: (1263, 1372),
-        7: (1267, 1469)
+        5: (53.04760881,54.77239228),
+        6: (53.13174459,57.71714455),
+        7: (53.30001614,61.79772985)
     }
-    lane_data_path = "../../myData/IntersectionA-01-trainsamples"
-    #prepare_data(lane_data_path,start_of_lane_coordsNow,end_of_lane_coordsNow)
+
+    lane_data_path = "IntersectionA-01-trainsamples"
+    prepare_data(lane_data_path,start_of_lane_coordsNow,end_of_lane_coordsNow)
     train_and_evaluate_model(unit=32,layNum=10,batch_size=640*20,epochs=500)#就trainsamples_lane_5_6_7.csv结论太好
                                                                             #不需要太好模型
     #train_and_evaluate_model(unit=256,layNum=30,batch_size=640*20,epochs=500)
+    
