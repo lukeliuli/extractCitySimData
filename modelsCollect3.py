@@ -247,9 +247,13 @@ class BraxIDMEnv:
 # ==========================================
 
 def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif"):
-    """可视化轨迹并可选保存为gif"""
+    """可视化轨迹并可选保存为gif（先保存为jpg，再合成gif）"""
+    output_dir = "brax_sim_frames"
     frames = []
-    for state in traj:
+    if save_gif:
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+    for idx, state in enumerate(traj):
         fig, ax = plt.subplots(figsize=(8, 2))
         ax.set_xlim(0, float(jnp.max(state.target_pos)) + 10)
         ax.set_ylim(-1, 1)
@@ -261,15 +265,21 @@ def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif"):
         ax.set_title(f"step={state.step_count} crashed={state.crashed}")
         plt.tight_layout()
         if save_gif:
-            # 保存为图片帧
-            fig.canvas.draw()
-            img = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
-            img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-            frames.append(img)
+            jpg_path = os.path.join(output_dir, f"frame_{idx:05d}.jpg")
+            fig.savefig(jpg_path, dpi=300)
         plt.close(fig)
-    if save_gif and frames:
-        imageio.mimsave(gif_path, frames, duration=0.1)
-        print(f"已保存gif到 {gif_path}")
+    if save_gif:
+        # 合成gif
+        frame_files = sorted(
+            [os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith('.jpg')],
+            key=lambda x: int(os.path.basename(x).split('_')[1].split('.')[0])
+        )
+        if frame_files:
+            images = [imageio.imread(f) for f in frame_files]
+            imageio.mimsave(gif_path, images, fps=10)
+            print(f"已保存gif到 {gif_path}")
+        else:
+            print(f"未找到jpg帧，无法生成gif。")
 
 if __name__ == "__main__":
     # 参数可调
