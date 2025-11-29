@@ -263,7 +263,7 @@ def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif"):
         if save_gif:
             # 保存为图片帧
             fig.canvas.draw()
-            img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+            img = np.frombuffer(fig.canvas.tostring_argb(), dtype=np.uint8)
             img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
             frames.append(img)
         plt.close(fig)
