@@ -134,18 +134,19 @@ class BraxIDMEnv:
         self.dt = dt
         self.red_light_pos = red_light_pos  # 红灯位置
 
-    def reset(self, rng: jnp.ndarray, init_pos: jnp.ndarray, params: IDMParams) -> EnvState:
-        """初始化环境，所有车辆目标点为1000"""
+    def reset(self, rng: jnp.ndarray, init_pos: jnp.ndarray,init_vel: jnp.ndarray, params: IDMParams) -> EnvState:
+        """初始化环境，所有车辆目标点为1000，支持初始速度设定"""
         target_pos = jnp.ones(self.num_vehicles) * 1000.0
         return EnvState(
             position=init_pos,
-            velocity=jnp.zeros(self.num_vehicles),
+            velocity=init_vel,
             acceleration=jnp.zeros(self.num_vehicles),
             target_pos=target_pos,
             params=params,
             step_count=0,
             crashed=False
         )
+
 
     def step(self, state: EnvState, action: Optional[jnp.ndarray] = None) -> EnvState:
         """
@@ -297,6 +298,7 @@ if __name__ == "__main__":
     env = BraxIDMEnv(num_vehicles=2, dt=0.1, red_light_pos=100.0)
     # 初始位置和目标
     init_pos = jnp.array([30.0, 20.0])  # 车1在后，车0在前
+    init_vel = jnp.array([50.0/3.6, 50.0/3.6])  # 车1在后，车0在前
     rng = jax.random.PRNGKey(0)
     state = env.reset(rng, init_pos, params)
     traj = env.rollout(state, max_steps=300)
