@@ -6,6 +6,9 @@ from tqdm import tqdm
 import random
 import math
 
+'''
+采用全局搜索模型（如模拟退火），对车辆跟随模型进行参数优化。不使用神经网络。
+'''
 # =============================================================================
 # IDM 参数优化模块
 # =============================================================================
@@ -294,4 +297,4 @@ if __name__ == "__main__":
     # model_with_ensemble(unit=256, layNum=10, batch_size=640*20, epochs=500, test_size=0.9, ensemble_size=5) 
     # model_with_SimulCal_SimpleResnet(unit=256, layNum=10, batch_size=64, epochs=50, test_size=0.9,simNum=10)
 
-
+    还没有运行测试过

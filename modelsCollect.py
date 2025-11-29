@@ -437,10 +437,10 @@ import sys
 from tqdm import tqdm
 if __name__ == "__main__":
     
-    sys.stdout = open('output.log', 'w', encoding='utf-8') 
-    #model_simpleResnet0(unit=256,layNum=10,batch_size=640*20,epochs=500)
+    sys.stdout = open('output_simpleResnet0.log', 'w', encoding='utf-8') 
+    model_simpleResnet0(unit=256,layNum=10,batch_size=640*20,epochs=500)
     #model_with_MCDDropout(unit=256, layNum=10, batch_size=640*20, epochs=500, test_size=0.9, mc_samples=10)
     #model_with_ensemble(unit=256, layNum=10, batch_size=640*20, epochs=500, test_size=0.9, ensemble_size=5) 
-    model_with_SimulCal_SimpleResnet(unit=256, layNum=10, batch_size=64, epochs=50, test_size=0.9,simNum=10)
+    #model_with_SimulCal_SimpleResnet(unit=256, layNum=10, batch_size=64, epochs=50, test_size=0.9,simNum=10)
 
   

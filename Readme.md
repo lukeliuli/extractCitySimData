@@ -26,10 +26,21 @@
 - **prepare_data**:IntersectionA-01-trainsamples读入每个车道每帧的类似的数据，并筛选特征和形成训练数据
 - **train_and_evaluate_model**:根据形成的训练数据，采用最简单的resnet进行训练和评估
 
-#### modelCollect 中所有函数的简要功能解释：
+#### modelCollect.py 中所有函数的简要功能解释：
 - **model_simpleResnet0** 与test2的train_and_evaluate_model一样，采用最简单的resnet进行训练和评估被test2调用进行训练的评估。
 - **model_with_MCDDropout** 与test2的train_and_evaluate_model一样，采用最简单的MCDrop进行随机采样的进行训练和评估被test2调用进行训练的评估。
 - **#model_with_ensemble** 与test2的train_and_evaluate_model一样，采用集成模型的进行多模型采样的进行训练和评估被test2调用进行训练的评估。
+- 
+#### modelCollect2.py 中所有函数的简要功能解释（采用全局搜索模型，对车辆跟随模型进行参数优化）：
+- **simulated_annealing** 模拟退火（现阶段调试成功）
+- **genetic_algorithm** 基因算法（没有调试成功）
+- **random_search** 随机搜索（没有调试成功）
+- **注意**，以上算法采用pyGameInterface2，也就是所有车辆采用相同参数的一个idm跟车模型
+  
+#### modelCollect4.py 
+-- 因为仿真物理模型无法可微，导致模型训练过程出现大问题，所以这个模型到此为止
+-- 采用采用pyGameInterface3，每一个车辆都有一个专有参数的idm跟车模型
+
 
 ## 基本信息
     - 数据在 https://github.com/UCF-SST-Lab/UCF-SST-CitySim1-Dataset
