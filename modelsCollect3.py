@@ -263,9 +263,10 @@ def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif"):
             ax.text(x, 0.2, f"v={float(v):.2f}", ha='center')
         ax.legend()
         ax.set_title(f"step={state.step_count} crashed={state.crashed}")
-        plt.tight_layout()
+        
+        #plt.tight_layout()
         if save_gif:
-            jpg_path = os.path.join(output_dir, f"frame_{idx:05d}.jpg")
+            jpg_path = os.path.join(output_dir, f"frame_{state.step_count:05d}.jpg")
             fig.savefig(jpg_path, dpi=300)
         plt.close(fig)
     if save_gif:
