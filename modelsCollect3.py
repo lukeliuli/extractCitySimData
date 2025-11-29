@@ -277,7 +277,7 @@ def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif"):
         )
         if frame_files:
             images = [imageio.imread(f) for f in frame_files]
-            imageio.mimsave(gif_path, images, fps=10)
+            imageio.mimsave(gif_path, images, duration=0.1)
             print(f"已保存gif到 {gif_path}")
         else:
             print(f"未找到jpg帧，无法生成gif。")
