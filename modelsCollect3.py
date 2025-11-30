@@ -68,7 +68,10 @@ def compute_idm_acc(
     v: jnp.ndarray,
     v_front: jnp.ndarray,
     dist_gap: jnp.ndarray,
-    params: IDMParams
+    params: IDMParams,
+    log_list: list = None,
+    step_count: int = None,
+    car_ids: list = None
 ) -> jnp.ndarray:
     """
     计算IDM加速度 (支持 vmap)
@@ -81,17 +84,47 @@ def compute_idm_acc(
     # 期望间距 s*
     # s* = s0 + v*T + (v * dv) / (2 * sqrt(a*b))
     delta_v = v - v_front
-    s_star = params.s0 + jnp.maximum(0.0, v * params.T + (v * delta_v) / (2.0 * jnp.sqrt(params.a * params.b)))
+    s_star = params.s0 + v * params.T + (v * delta_v) / (2.0 * jnp.sqrt(params.a * params.b))
     
-    # 避免除以零
-    safe_gap = jnp.maximum(dist_gap, 0.1)
+
     
-    interaction_acc = -params.a * (s_star / safe_gap) ** 2
+    interaction_acc = -params.a * (s_star / dist_gap) ** 2
     
+    idmacc = free_acc + interaction_acc
     # 如果前方没有车 (dist_gap 非常大)，interaction_acc 趋近于 0
     # 我们通过 mask 在外部控制，或者在这里假设 dist_gap 很大
     
-    return free_acc + interaction_acc
+    # 日志记录
+    if log_list is not None:
+        v_np = np.asarray(v)
+        v_front_np = np.asarray(v_front)
+        dist_gap_np = np.asarray(dist_gap)
+        free_acc_np = np.asarray(free_acc)
+        interaction_acc_np = np.asarray(interaction_acc)
+        delta_v_np = np.asarray(delta_v)
+        step = int(step_count) if step_count is not None else -1
+        ids = car_ids if car_ids is not None else list(range(len(v_np)))
+        for i in range(len(v_np)):
+            log_list.append({
+                'step': step,
+                'car_id': int(ids[i]),
+                'v': float(v_np[i]),
+                'v_front': float(v_front_np[i]),
+                'dist_gap': float(dist_gap_np[i]),
+                'free_acc': float(free_acc_np[i]),
+                'interaction_acc': float(interaction_acc_np[i]),
+                'idm_acc': float(idmacc[i]),
+                'delta_v': float(delta_v_np[i]),
+                'a': float(np.asarray(params.a)[i]),
+                'v0': float(np.asarray(params.v0)[i]),
+                'T': float(np.asarray(params.T)[i]),
+                's0': float(np.asarray(params.s0)[i]),
+                'b': float(np.asarray(params.b)[i]),
+                'delta': float(np.asarray(params.delta)[i]),
+                'length': float(np.asarray(params.length)[i]),
+                'rtime': float(np.asarray(params.rtime)[i]),
+            })
+    return idmacc
 
 def compute_stopping_acc(
     v: jnp.ndarray,
@@ -150,7 +183,7 @@ class BraxIDMEnv:
         )
 
 
-    def step(self, state: EnvState, action: Optional[jnp.ndarray] = None) -> EnvState:
+    def step(self, state: EnvState, action: Optional[jnp.ndarray] = None, idm_log_list: list = None) -> EnvState:
         """
         单步仿真，返回新状态。
         距离目标最近的为头车，头车前方无车，跟车车辆根据IDM模型跟随头车。
@@ -190,7 +223,12 @@ class BraxIDMEnv:
         gaps = pos_front - pos - p_sorted.length
 
         # IDM加速度
-        acc_idm = compute_idm_acc(vel, vel_front, gaps, p_sorted)
+        acc_idm = compute_idm_acc(
+            vel, vel_front, gaps, p_sorted,
+            log_list=idm_log_list,
+            step_count=state.step_count,
+            car_ids=list(idx)
+        )
 
         # 到目标点的距离
         dist_to_target = tgt - pos - p_sorted.length
@@ -233,12 +271,14 @@ class BraxIDMEnv:
         )
         return new_state
 
-    def rollout(self, state: EnvState, max_steps: int = 200):
+    def rollout(self, state: EnvState, max_steps: int = 200, idm_log_csv: str = None):
         """
         仿真直到所有车辆通过目标点且无碰撞，或达到最大步数。
         达成目标：所有车辆都已通过目标点（位置大于目标点），且未发生碰撞。
+        新增：可选记录每步IDM输入和中间量到csv。
         """
         traj = []
+        idm_log_list = [] if idm_log_csv is not None else None
         for _ in range(max_steps):
             traj.append(state)
             if state.crashed:
@@ -247,7 +287,13 @@ class BraxIDMEnv:
             arrived = jnp.all(state.position - state.target_pos > 0.0)
             if arrived:
                 break
-            state = self.step(state)
+            state = self.step(state, idm_log_list=idm_log_list)
+        # 仿真结束后保存csv
+        if idm_log_csv is not None and idm_log_list is not None:
+            import pandas as pd
+            df = pd.DataFrame(idm_log_list)
+            df.to_csv(idm_log_csv, index=False)
+            print(f"已保存IDM日志到 {idm_log_csv}")
         return traj
 
 # ==========================================
@@ -359,7 +405,7 @@ if __name__ == "__main__":
     init_vel = jnp.array([50.0/3.6, 50.0/3.6])  # 车1在后，车0在前
     rng = jax.random.PRNGKey(0)
     state = env.reset(rng, init_pos, init_vel,params)
-    traj = env.rollout(state, max_steps=500)
+    traj = env.rollout(state, max_steps=500, idm_log_csv="idm_step_log.csv")
     plot_traj(traj, save_gif=True, gif_path="idm_2cars_redlight.gif", save_csv=True, csv_path="traj_log.csv", log_detail=False)
 
 '''

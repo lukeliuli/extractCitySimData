@@ -81,12 +81,11 @@ def compute_idm_acc(
     # 期望间距 s*
     # s* = s0 + v*T + (v * dv) / (2 * sqrt(a*b))
     delta_v = v - v_front
-    s_star = params.s0 + jnp.maximum(0.0, v * params.T + (v * delta_v) / (2.0 * jnp.sqrt(params.a * params.b)))
+    s_star = params.s0 + v * params.T + (v * delta_v) / (2.0 * jnp.sqrt(params.a * params.b))
     
-    # 避免除以零
-    safe_gap = jnp.maximum(dist_gap, 0.1)
+
     
-    interaction_acc = -params.a * (s_star / safe_gap) ** 2
+    interaction_acc = -params.a * (s_star / dist_gap) ** 2
     
     # 如果前方没有车 (dist_gap 非常大)，interaction_acc 趋近于 0
     # 我们通过 mask 在外部控制，或者在这里假设 dist_gap 很大
