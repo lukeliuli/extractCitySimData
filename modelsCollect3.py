@@ -236,8 +236,8 @@ class BraxIDMEnv:
 
         # 取更强制动（停车优先）
         target_mask = tgt < 1e8
-        final_acc = jnp.where(target_mask, jnp.minimum(acc_idm, acc_stop), acc_idm)
-
+        #final_acc = jnp.where(target_mask, jnp.minimum(acc_idm, acc_stop), acc_idm)
+        final_acc = acc_idm
         # 平滑加速度
         alpha = 1.0 - jnp.exp(-p_sorted.rtime / self.dt)
         smoothed_acc = acc + alpha * (final_acc - acc)
