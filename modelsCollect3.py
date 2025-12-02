@@ -48,6 +48,8 @@ class IDMParams:
     delta: jnp.ndarray   # 加速度指数
     length: jnp.ndarray  # 车长（已加入，建议设为5.0）
     rtime: jnp.ndarray   # 反应时间 (用于平滑加速度)
+    
+
 
 @struct.dataclass
 class EnvState:
@@ -59,41 +61,41 @@ class EnvState:
     params: IDMParams          # 车辆参数
     step_count: int            # 步数
     crashed: bool              # 是否发生碰撞
-
+    front_car_id: jnp.ndarray  # shape=(N,)
 # ==========================================
 # 2. 核心物理逻辑 (JAX Functional Style)
 # ==========================================
-
 def compute_idm_acc(
     v: jnp.ndarray,
     v_front: jnp.ndarray,
     dist_gap: jnp.ndarray,
     params: IDMParams,
+    front_car_id: jnp.ndarray ,
     log_list: list = None,
     step_count: int = None,
     car_ids: list = None
 ) -> jnp.ndarray:
     """
     计算IDM加速度 (支持 vmap)
-    dist_gap 已经包含了车长的影响（见step函数），无需再减车长
+    增加front_car_id: 若有前车，free_acc为原始值；否则free_acc为固定值（如0）。
+    idm params.v0*1.3,这里有问题    
     """
-    # 自由流项
-    free_acc = params.a * (1.0 - (v / params.v0) ** params.delta)
-    
+    # 判断是否有前车（front_car_id >= 0）
+    has_front =front_car_id >= 0
+    # 原始free_acc
+    free_acc_orig0 = params.a * (1.0 - (v / params.v0) ** params.delta)
+    free_acc_orig1 = params.a * (1.0 - (v / (params.v0*1.3)) ** params.delta)
+
+    # 没有前车时free_acc
+    free_acc = jnp.where(has_front, free_acc_orig1, free_acc_orig0)
+
     # 交互项
-    # 期望间距 s*
-    # s* = s0 + v*T + (v * dv) / (2 * sqrt(a*b))
     delta_v = v - v_front
     s_star = params.s0 + v * params.T + (v * delta_v) / (2.0 * jnp.sqrt(params.a * params.b))
-    
-
-    
     interaction_acc = -params.a * (s_star / dist_gap) ** 2
-    
+
     idmacc = free_acc + interaction_acc
-    # 如果前方没有车 (dist_gap 非常大)，interaction_acc 趋近于 0
-    # 我们通过 mask 在外部控制，或者在这里假设 dist_gap 很大
-    
+
     # 日志记录
     if log_list is not None:
         v_np = np.asarray(v)
@@ -104,10 +106,12 @@ def compute_idm_acc(
         delta_v_np = np.asarray(delta_v)
         step = int(step_count) if step_count is not None else -1
         ids = car_ids if car_ids is not None else list(range(len(v_np)))
+        front_ids = np.asarray(front_car_id) if front_car_id is not None else [None] * len(v_np)
         for i in range(len(v_np)):
             log_list.append({
                 'step': step,
                 'car_id': int(ids[i]),
+                'front_car_id': int(front_ids[i]) if front_car_id is not None else None,
                 'v': float(v_np[i]),
                 'v_front': float(v_front_np[i]),
                 'dist_gap': float(dist_gap_np[i]),
@@ -126,6 +130,7 @@ def compute_idm_acc(
             })
     return idmacc
 
+
 def compute_stopping_acc(
     v: jnp.ndarray,
     dist_to_target: jnp.ndarray,
@@ -133,18 +138,27 @@ def compute_stopping_acc(
 ) -> jnp.ndarray:
     """
     计算为了在目标位置停止所需的加速度
+    只有当距离目标小于 3 倍当前车速时，才开始计算停止加速度，否则返回0
+    保持可微（避免if分支），用sigmoid平滑切换
     """
     # 距离目标的净距离
     net_dist = dist_to_target - params.s0
-    
-    # 如果已经到达或超过停止线 (net_dist <= 0)，施加最大制动
-    # 使用 sigmoid 或类似平滑函数保持可微性，这里简化处理
-    
+
+    # 阈值：3倍车速
+    threshold = 2.0 * v
+
+    # 平滑掩码，sigmoid在0附近切换
+    stop_mask = jax.nn.sigmoid(10.0 * (threshold - net_dist))  # net_dist < threshold 时趋近1
+
     # 物理公式: v^2 = 2 * a * d  => a = -v^2 / (2d)
     req_acc = -(v ** 2) / (2.0 * jnp.maximum(net_dist, 0.1))
-    
+
     # 限制最大减速度，防止数值爆炸，但允许紧急制动
-    return jnp.maximum(req_acc, -9.0)
+    stop_acc = jnp.maximum(req_acc, -9.0)
+
+    # 只有在掩码为1时才施加停止加速度，否则为0
+    return stop_mask,stop_acc
+
 
 # 距离目标位置越近的点为头车，为第一辆车
 # 可用于仿真前对车辆排序，确保IDM跟车关系正确
@@ -179,7 +193,8 @@ class BraxIDMEnv:
             target_pos=target_pos,
             params=params,
             step_count=0,
-            crashed=False
+            crashed=False,
+            front_car_id=jnp.full((self.num_vehicles,), -1, dtype=jnp.int32)
         )
 
 
@@ -204,6 +219,15 @@ class BraxIDMEnv:
             delta=p.delta[idx], length=p.length[idx], rtime=p.rtime[idx]
         )
 
+        # 恢复原始顺序
+        inv_idx = jnp.argsort(idx)
+        # JAX风格前车id计算：头车为-1，其余为前一个排序后idx
+        front_car_id_sorted = jnp.full((len(idx),), -1, dtype=jnp.int32)
+        front_car_id_sorted = front_car_id_sorted.at[1:].set(idx[:-1])
+        # 恢复原始顺序
+        front_car_id = jnp.empty_like(front_car_id_sorted)
+        front_car_id = front_car_id.at[inv_idx].set(front_car_id_sorted)
+
         # 红灯逻辑：如果车辆距离红灯小于一定阈值，则目标点临时设为红灯位置
         # 例如阈值为10m
         red_light_arr = jnp.ones_like(pos) * self.red_light_pos
@@ -225,6 +249,7 @@ class BraxIDMEnv:
         # IDM加速度
         acc_idm = compute_idm_acc(
             vel, vel_front, gaps, p_sorted,
+            front_car_id=front_car_id_sorted,
             log_list=idm_log_list,
             step_count=state.step_count,
             car_ids=list(idx)
@@ -232,12 +257,12 @@ class BraxIDMEnv:
 
         # 到目标点的距离
         dist_to_target = tgt - pos - p_sorted.length
-        acc_stop = compute_stopping_acc(vel, dist_to_target, p_sorted)
+        stop_mask2,acc_stop = compute_stopping_acc(vel, dist_to_target, p_sorted)
 
         # 取更强制动（停车优先）
-        target_mask = tgt < 1e8
-        #final_acc = jnp.where(target_mask, jnp.minimum(acc_idm, acc_stop), acc_idm)
-        final_acc = acc_idm
+        #target_mask = tgt < 1e8
+        final_acc = jnp.where(stop_mask2, jnp.minimum(acc_idm, acc_stop), acc_idm)
+        #final_acc = acc_idm
         # 平滑加速度
         alpha = 1.0 - jnp.exp(-p_sorted.rtime / self.dt)
         smoothed_acc = acc + alpha * (final_acc - acc)
@@ -254,8 +279,7 @@ class BraxIDMEnv:
         is_crashed = jnp.any(-pos_diff < 5.5)
         #rint(new_pos)
         #print(pos_diff)
-        # 恢复原始顺序
-        inv_idx = jnp.argsort(idx)
+
         new_state = EnvState(
             position=new_pos[inv_idx],
             velocity=new_vel[inv_idx],
@@ -267,7 +291,8 @@ class BraxIDMEnv:
                 length=p_sorted.length[inv_idx], rtime=p_sorted.rtime[inv_idx]
             ),
             step_count=state.step_count + 1,
-            crashed=bool(is_crashed)
+            crashed=bool(is_crashed),
+            front_car_id=front_car_id
         )
         return new_state
 
@@ -292,7 +317,7 @@ class BraxIDMEnv:
         if idm_log_csv is not None and idm_log_list is not None:
             import pandas as pd
             df = pd.DataFrame(idm_log_list)
-            df.to_csv(idm_log_csv, index=False)
+            df.to_csv(idm_log_csv, index=False,float_format='%.2f')
             print(f"已保存IDM日志到 {idm_log_csv}")
         return traj
 
@@ -384,7 +409,7 @@ def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif", save_csv=False, csv
             print(f"未找到jpg帧，无法生成gif。")
     if save_csv:
         df = pd.DataFrame(log_rows)
-        df.to_csv(csv_path, index=False)
+        df.to_csv(csv_path, index=False,float_format='%.2f')
         print(f"已保存轨迹日志到 {csv_path}")
 
 if __name__ == "__main__":
@@ -401,12 +426,12 @@ if __name__ == "__main__":
     )
     env = BraxIDMEnv(num_vehicles=2, dt=0.1, red_light_pos=900.0)
     # 初始位置和目标
-    init_pos = jnp.array([10, 0])  # 车1在后，车0在前
+    init_pos = jnp.array([50.0/3.6*1+5, 0])  # 车1在后，车0在前.idm适合与稳定的跟车阶段，不是追赶阶段
     init_vel = jnp.array([50.0/3.6, 50.0/3.6])  # 车1在后，车0在前
     rng = jax.random.PRNGKey(0)
     state = env.reset(rng, init_pos, init_vel,params)
     traj = env.rollout(state, max_steps=500, idm_log_csv="idm_step_log.csv")
-    plot_traj(traj, save_gif=True, gif_path="idm_2cars_redlight.gif", save_csv=True, csv_path="traj_log.csv", log_detail=False)
+    plot_traj(traj, save_gif=False, gif_path="idm_2cars_redlight.gif", save_csv=True, csv_path="traj_log.csv", log_detail=False)
 
 '''
 
