@@ -62,6 +62,12 @@ class EnvState:
     step_count: int            # 步数
     crashed: bool              # 是否发生碰撞
     front_car_id: jnp.ndarray  # shape=(N,)
+    red_light_pos: float       # 红灯位置
+    red_light_state: bool      # 红灯是否为红(True)/绿(False)
+    red_light_remaining: float # 红灯剩余时间(秒)
+    time_to_vanish: jnp.ndarray # 每辆车通过红灯的时间，未通过为-1
+    acc_stop: jnp.ndarray      # 停止加速度
+    final_acc: jnp.ndarray     # 最终加速度
 # ==========================================
 # 2. 核心物理逻辑 (JAX Functional Style)
 # ==========================================
@@ -142,22 +148,21 @@ def compute_stopping_acc(
     保持可微（避免if分支），用sigmoid平滑切换
     """
     # 距离目标的净距离
-    net_dist = dist_to_target - params.s0
+    net_dist = dist_to_target
 
-    # 阈值：3倍车速
-    threshold = 2.0 * v
-
-    # 平滑掩码，sigmoid在0附近切换
-    stop_mask = jax.nn.sigmoid(10.0 * (threshold - net_dist))  # net_dist < threshold 时趋近1
 
     # 物理公式: v^2 = 2 * a * d  => a = -v^2 / (2d)
-    req_acc = -(v ** 2) / (2.0 * jnp.maximum(net_dist, 0.1))
+    req_acc = -(v ** 2) / (2.0 * jnp.maximum(net_dist, 0.01))
 
     # 限制最大减速度，防止数值爆炸，但允许紧急制动
+    
     stop_acc = jnp.maximum(req_acc, -9.0)
 
+    # 如果距离非常近，强制急停（JAX兼容写法）
+    stop_acc = jnp.where(net_dist <= 0, -9.0, stop_acc)
+
     # 只有在掩码为1时才施加停止加速度，否则为0
-    return stop_mask,stop_acc
+    return stop_acc
 
 
 # 距离目标位置越近的点为头车，为第一辆车
@@ -178,10 +183,11 @@ def sort_by_target_distance(position: jnp.ndarray, target_pos: jnp.ndarray):
 # ==========================================
 
 class BraxIDMEnv:
-    def __init__(self, num_vehicles: int = 2, dt: float = 0.1, red_light_pos: float = 100.0):
+    def __init__(self, num_vehicles: int = 2, dt: float = 0.1, red_light_pos: float = 100.0, red_light_duration: float = 30.0):
         self.num_vehicles = num_vehicles
         self.dt = dt
         self.red_light_pos = red_light_pos  # 红灯位置
+        self.red_light_duration = red_light_duration  # 红灯时长(秒)
 
     def reset(self, rng: jnp.ndarray, init_pos: jnp.ndarray,init_vel: jnp.ndarray, params: IDMParams) -> EnvState:
         """初始化环境，所有车辆目标点为1000，支持初始速度设定"""
@@ -194,7 +200,13 @@ class BraxIDMEnv:
             params=params,
             step_count=0,
             crashed=False,
-            front_car_id=jnp.full((self.num_vehicles,), -1, dtype=jnp.int32)
+            front_car_id=jnp.full((self.num_vehicles,), -1, dtype=jnp.int32),
+            red_light_pos=self.red_light_pos,
+            red_light_state=True,  # 初始为红灯
+            red_light_remaining=self.red_light_duration,
+            time_to_vanish=jnp.full((self.num_vehicles,), -1.0),
+            acc_stop=jnp.zeros(self.num_vehicles),
+            final_acc=jnp.zeros(self.num_vehicles)
         )
 
 
@@ -228,16 +240,14 @@ class BraxIDMEnv:
         front_car_id = jnp.empty_like(front_car_id_sorted)
         front_car_id = front_car_id.at[inv_idx].set(front_car_id_sorted)
 
-        # 红灯逻辑：如果车辆距离红灯小于一定阈值，则目标点临时设为红灯位置
-        # 例如阈值为10m
-        red_light_arr = jnp.ones_like(pos) * self.red_light_pos
-        near_red = (red_light_arr - pos) < 10.0
-        # 只对未通过红灯的车辆生效
-        not_passed_red = pos < self.red_light_pos
-        # 需要停车的车辆
-        stop_mask = near_red & not_passed_red
-        # 临时目标点
-        tgt = jnp.where(stop_mask, self.red_light_pos, tgt)
+        # 红灯逻辑：如果红灯为红，且车辆距离红灯小于一定阈值，则目标点临时设为红灯位置
+        red_light_arr = jnp.ones_like(pos) * state.red_light_pos
+        near_red = (red_light_arr - pos) < vel * 3.0  # 3秒内能到达红灯位置
+        near_red2 = (red_light_arr - pos) < 20  # 30米内能到达红灯位置
+        not_passed_red = pos < state.red_light_pos
+        near_red2 = near_red2 | near_red2
+        stop_mask = near_red2 & not_passed_red & state.red_light_state
+        tgt = jnp.where(stop_mask, state.red_light_pos, tgt)
 
         #头车前方无车，gap设为极大，前车速度设为0，头车的idx为0
         #index 0 is the front car of index 1
@@ -256,17 +266,18 @@ class BraxIDMEnv:
         )
 
         # 到目标点的距离
-        dist_to_target = tgt - pos - p_sorted.length
-        stop_mask2,acc_stop = compute_stopping_acc(vel, dist_to_target, p_sorted)
+        dist_to_target = tgt - pos - p_sorted.length/2
+        acc_stop = compute_stopping_acc(vel, dist_to_target, p_sorted)
 
         # 取更强制动（停车优先）
         #target_mask = tgt < 1e8
-        final_acc = jnp.where(stop_mask2, jnp.minimum(acc_idm, acc_stop), acc_idm)
+        final_acc = jnp.where(stop_mask, jnp.minimum(acc_idm, acc_stop), acc_idm)
         #final_acc = acc_idm
         # 平滑加速度
-        alpha = 1.0 - jnp.exp(-p_sorted.rtime / self.dt)
-        smoothed_acc = acc + alpha * (final_acc - acc)
+        alpha = jnp.exp(-p_sorted.rtime / self.dt)
+        smoothed_acc = alpha*final_acc + (1-alpha) * acc
         smoothed_acc = jnp.clip(smoothed_acc, -9.0, p_sorted.a)
+      
 
         # 积分更新
         new_vel = jnp.maximum(vel + smoothed_acc * self.dt, 0.0)
@@ -280,6 +291,19 @@ class BraxIDMEnv:
         #rint(new_pos)
         #print(pos_diff)
 
+        # 红灯倒计时与状态切换
+        red_light_remaining = state.red_light_remaining - self.dt if state.red_light_state else 0.0
+        red_light_state = state.red_light_state
+        if state.red_light_state and red_light_remaining <= 0:
+            red_light_state = False  # 红灯变绿
+            red_light_remaining = 0.0
+
+        # 记录每辆车通过红灯的时间
+        prev_time_to_vanish = state.time_to_vanish
+        # 通过红灯条件：上一步没通过，这一步位置>=红灯位置
+        passed_mask = (state.position < state.red_light_pos) & (new_pos[inv_idx] >= state.red_light_pos)
+        new_time_to_vanish = jnp.where((prev_time_to_vanish < 0) & passed_mask, (state.step_count+1)*self.dt, prev_time_to_vanish)
+
         new_state = EnvState(
             position=new_pos[inv_idx],
             velocity=new_vel[inv_idx],
@@ -292,7 +316,13 @@ class BraxIDMEnv:
             ),
             step_count=state.step_count + 1,
             crashed=bool(is_crashed),
-            front_car_id=front_car_id
+            front_car_id=front_car_id,
+            red_light_pos=state.red_light_pos,
+            red_light_state=red_light_state,
+            red_light_remaining=red_light_remaining,
+            time_to_vanish=new_time_to_vanish,
+            acc_stop=acc_stop[inv_idx],
+            final_acc=final_acc[inv_idx]
         )
         return new_state
 
@@ -324,7 +354,14 @@ class BraxIDMEnv:
 # ==========================================
 # 4. 测试脚本与可视化
 # ==========================================
+# 在plot_traj中增加红灯状态和剩余时间的可视化
+def plot_red_light(ax, red_light_pos, red_light_state, red_light_remaining):
+    color = 'red' if red_light_state else 'green'
+    ax.axvline(red_light_pos, color=color, linestyle='-', linewidth=3, alpha=0.6, label=f"RedLight ({color})")
+    ax.text(red_light_pos + 1, 0.7, f"{'红灯' if red_light_state else '绿灯'}\n剩余{red_light_remaining:.1f}s",
+            color=color, fontsize=10, bbox=dict(facecolor='white', alpha=0.7, edgecolor=color))
 
+# 修改plot_traj调用
 def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif", save_csv=False, csv_path="traj_log.csv", log_detail=False):
     """可视化轨迹并可选保存为gif和csv（先保存为jpg，再合成gif）"""
     output_dir = "brax_sim_frames"
@@ -340,6 +377,8 @@ def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif", save_csv=False, csv
         vel_sorted = state.velocity[sort_idx]
         acc_sorted = state.acceleration[sort_idx]
         tgt_sorted = state.target_pos[sort_idx]
+        acc_stop_sorted = state.acc_stop[sort_idx]
+        final_acc_sorted = state.final_acc[sort_idx]
         params_sorted = IDMParams(
             v0=state.params.v0[sort_idx],
             T=state.params.T[sort_idx],
@@ -367,6 +406,99 @@ def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif", save_csv=False, csv
                 "target_pos": float(t),
                 "gap_to_front": float(gap),
                 "dv_to_front": float(dv),
+                "acc_stop": float(acc_stop_sorted[i]),
+                "final_acc": float(final_acc_sorted[i]),
+                "v0": float(params_sorted.v0[i]),
+                "T": float(params_sorted.T[i]),
+                "s0": float(params_sorted.s0[i]),
+                "a_param": float(params_sorted.a[i]),
+                "b_param": float(params_sorted.b[i]),
+                "delta": float(params_sorted.delta[i]),
+                "length": float(params_sorted.length[i]),
+                "rtime": float(params_sorted.rtime[i]),
+                "crashed": state.crashed
+            }
+            log_rows.append(row)
+            if log_detail:
+                print(row)
+        # 可视化部分
+        fig, ax = plt.subplots(figsize=(18, 2))
+        ax.set_xlim(0, float(jnp.max(state.target_pos)) + 10)
+        ax.set_ylim(-1, 1)
+        for i, (x, v, t) in enumerate(zip(state.position, state.velocity, state.target_pos)):
+            ax.plot([x], [0], 'o', label=f"car{i} pos={float(x):.2f} v={float(v):.2f}")
+            ax.axvline(t, color='r', linestyle='--', alpha=0.5)
+        # 增加红灯状态和剩余时间显示
+        plot_red_light(ax, state.red_light_pos, state.red_light_state, state.red_light_remaining)
+        ax.legend()
+        ax.set_title(f"step={state.step_count} crashed={state.crashed}")
+        plt.tight_layout()
+        if save_gif:
+            jpg_path = os.path.join(output_dir, f"frame_{state.step_count:05d}.jpg")
+            fig.savefig(jpg_path, dpi=300)
+        plt.close(fig)
+    if save_gif:
+        # 合成gif
+        frame_files = sorted(
+            [os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith('.jpg')],
+            key=lambda x: int(os.path.basename(x).split('_')[1].split('.')[0])
+        )
+        if frame_files:
+            images = [imageio.imread(f) for f in frame_files]
+            imageio.mimsave(gif_path, images, duration=0.1)
+            print(f"已保存gif到 {gif_path}")
+        else:
+            print(f"未找到jpg帧，无法生成gif。")
+    if save_csv:
+        df = pd.DataFrame(log_rows)
+        df.to_csv(csv_path, index=False,float_format='%.2f')
+        print(f"已保存轨迹日志到 {csv_path}")
+def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif", save_csv=False, csv_path="traj_log.csv", log_detail=False):
+    """可视化轨迹并可选保存为gif和csv（先保存为jpg，再合成gif）"""
+    output_dir = "brax_sim_frames"
+    frames = []
+    log_rows = []
+    if save_gif:
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+    for idx, state in enumerate(traj):
+        # 记录每辆车的参数和状态，先按位置从小到大排序
+        sort_idx = jnp.argsort(state.position)
+        pos_sorted = state.position[sort_idx]
+        vel_sorted = state.velocity[sort_idx]
+        acc_sorted = state.acceleration[sort_idx]
+        tgt_sorted = state.target_pos[sort_idx]
+        acc_stop_sorted = state.acc_stop[sort_idx]
+        final_acc_sorted = state.final_acc[sort_idx]
+        params_sorted = IDMParams(
+            v0=state.params.v0[sort_idx],
+            T=state.params.T[sort_idx],
+            s0=state.params.s0[sort_idx],
+            a=state.params.a[sort_idx],
+            b=state.params.b[sort_idx],
+            delta=state.params.delta[sort_idx],
+            length=state.params.length[sort_idx],
+            rtime=state.params.rtime[sort_idx]
+        )
+        for i, (x, v, a, t) in enumerate(zip(pos_sorted, vel_sorted, acc_sorted, tgt_sorted)):
+            # 计算与前车的距离和速度差
+            if i < len(pos_sorted) - 1:
+                gap = pos_sorted[i+1] - x - params_sorted.length[i]
+                dv = v - vel_sorted[i+1]
+            else:
+                gap = float(100000)
+                dv = float(0)
+            row = {
+                "step": state.step_count,
+                "car_id": int(sort_idx[i]),
+                "position": float(x),
+                "velocity": float(v),
+                "acceleration": float(a),
+                "target_pos": float(t),
+                "gap_to_front": float(gap),
+                "dv_to_front": float(dv),
+                "acc_stop": float(acc_stop_sorted[i]),
+                "final_acc": float(final_acc_sorted[i]),
                 "v0": float(params_sorted.v0[i]),
                 "T": float(params_sorted.T[i]),
                 "s0": float(params_sorted.s0[i]),
@@ -424,7 +556,7 @@ if __name__ == "__main__":
         length=jnp.array([5.0, 5.0]),
         rtime=jnp.array([0.02, 0.02])
     )
-    env = BraxIDMEnv(num_vehicles=2, dt=0.1, red_light_pos=900.0)
+    env = BraxIDMEnv(num_vehicles=2, dt=0.1, red_light_pos=100.0,red_light_duration=30.0)
     # 初始位置和目标
     init_pos = jnp.array([50.0/3.6*1+5, 0])  # 车1在后，车0在前.idm适合与稳定的跟车阶段，不是追赶阶段
     init_vel = jnp.array([50.0/3.6, 50.0/3.6])  # 车1在后，车0在前
@@ -433,8 +565,43 @@ if __name__ == "__main__":
     traj = env.rollout(state, max_steps=500, idm_log_csv="idm_step_log.csv")
     plot_traj(traj, save_gif=False, gif_path="idm_2cars_redlight.gif", save_csv=True, csv_path="traj_log.csv", log_detail=False)
 
+
+'''
+，参考mdelsCollect4.py的设计
+
+1.将车辆分为4类，分别为排队第一辆车（头车），排队第二辆车，排队第三辆车，其他车辆
+2.每类车辆使用都使用idm模型，但是参数不同（可变参数类型和范围参考modelCollect3）
+3.基于modelsCollect2中的simpleResnet模型，基于输入数据，预测4类车辆参数
+4.训练数据集生成方式参考modelsCollect.py
+5.模型训练是先用simple Resnet预测4类车辆的idm参数,然后根据4类车辆的idm参数，仿真模型预测车辆time_to vanish时间。训练目标是最小化time_to vanish预测误差
+6.训练不是用simple Resnet的预测time_t0_vanish，而是用仿真预测的time_to vanish时间和真实time_to vanish时间做mse损失
+7.注意保存仿真中间过程数据结果
+8.设置选项，是否启用print调试信息
+9.保存训练好的模型
+10.代码结构清晰，便于后续维护和扩展.例如将车辆分为5,6类等，增加需要训练的参数
+11.增加命令行参数，方便配置训练选项，例如是否启用print调试信息，训练轮数，学习率等
+12.增加日志记录功能，记录训练过程中的重要信息，例如损失值变化，模型保存路径等
+13.代码结果简单，不需要try except结构 ,不需要进行太多的错误处理
+14.输入数据就是 csv_path = 'trainsamples_lane_5_6_7.csv' 
+15.注意根据laneid,给出每条车道的intersection_pos
+16.使用tqdm显示训练进度
+17.注意仿真时，按照距离终点排序，将最近的3辆车分为1~3类，其余为4类，并为每辆车分配对应的IDM参数。
+18.注意参考pyGameInterface3中的TrafficSimulator和VehicleParams类，仿真模型预测车辆time_to vanish时间
+19.注意车辆的参数的变换范围参考modelsCollect3.py中的设置
+
+20.增加红灯位置和红灯状态。以及红灯剩余时间。
+21.车辆接近红灯位置时，停车等待红灯变绿
+22.红灯变绿后，车辆继续行驶，直至通过路口
+23.每辆车的idm参数可以不同,车辆
+24.记录每辆车的通过红灯时间time_to_vanish以及每一step的状态数据
 '''
 
+#将pyGameInterface3的车辆跟车模型转换为modelsCollect3重的车辆仿真模型BraxIDMEnv，注意1.modelCollect3的神经网络要优化的参数不变，神经网络的输入输出，基本逻辑不变。2.仿真模型的基本逻辑不变（如车分4个类型，第一辆车为第一类）
+'''
+
+
+
+# 使得车辆在最短时间内通过路口且不发生碰撞。
 # 例：可微损失函数（用于神经网络或优化器）
 def loss_fn(idm_params_flat):
     # idm_params_flat: shape=(2*8,)  # 2辆车，每辆8个参数
