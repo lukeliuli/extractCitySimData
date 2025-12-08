@@ -9,7 +9,7 @@
 5.如果点的运动方向前面有点，就按照idm跟车模型运动
 6.设置红灯位置，点一旦接近预定的红灯位置位置，就停止运动，直到停止到预定位置。
 7.后面的点不能超过前面的点
-8.参考pyGameInterface3.py的写法，完成brax模型的编写。注意brax的环境编写方式和pyGameInterface3.py不一样
+8.参考pyGameInterface3.py的写法，完成brax模型的编写。注意brax的环境编写方式和pyGameInterface3.py不一樣
 9.完成后，编写一个简单的测试脚本，测试二个点的运动情况，观察它们是否按照预期运动
 10.测试脚本中，设置点的初始位置和预定位置，观察它们的运动轨迹和最终位置
 11.把过程进行可视化，方便观察点的运动情况，同时保存为gif文件。设定开关控制是否保存gif
@@ -348,7 +348,7 @@ class BraxIDMEnv:
             import pandas as pd
             df = pd.DataFrame(idm_log_list)
             df.to_csv(idm_log_csv, index=False,float_format='%.2f')
-            print(f"已保存IDM日志到 {idm_log_csv}")
+            #print(f"已保存IDM日志到 {idm_log_csv}")
         return traj
 
 # ==========================================
@@ -427,101 +427,15 @@ def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif", save_csv=False, csv
         ax.set_ylim(-1, 1)
         for i, (x, v, t) in enumerate(zip(state.position, state.velocity, state.target_pos)):
             ax.plot([x], [0], 'o', label=f"car{i} pos={float(x):.2f} v={float(v):.2f}")
-            ax.axvline(t, color='r', linestyle='--', alpha=0.5)
-        # 增加红灯状态和剩余时间显示
-        plot_red_light(ax, state.red_light_pos, state.red_light_state, state.red_light_remaining)
-        ax.legend()
-        ax.set_title(f"step={state.step_count} crashed={state.crashed}")
-        plt.tight_layout()
-        if save_gif:
-            jpg_path = os.path.join(output_dir, f"frame_{state.step_count:05d}.jpg")
-            fig.savefig(jpg_path, dpi=300)
-        plt.close(fig)
-    if save_gif:
-        # 合成gif
-        frame_files = sorted(
-            [os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith('.jpg')],
-            key=lambda x: int(os.path.basename(x).split('_')[1].split('.')[0])
-        )
-        if frame_files:
-            images = [imageio.imread(f) for f in frame_files]
-            imageio.mimsave(gif_path, images, duration=0.1)
-            print(f"已保存gif到 {gif_path}")
-        else:
-            print(f"未找到jpg帧，无法生成gif。")
-    if save_csv:
-        df = pd.DataFrame(log_rows)
-        df.to_csv(csv_path, index=False,float_format='%.2f')
-        print(f"已保存轨迹日志到 {csv_path}")
-def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif", save_csv=False, csv_path="traj_log.csv", log_detail=False):
-    """可视化轨迹并可选保存为gif和csv（先保存为jpg，再合成gif）"""
-    output_dir = "brax_sim_frames"
-    frames = []
-    log_rows = []
-    if save_gif:
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-    for idx, state in enumerate(traj):
-        # 记录每辆车的参数和状态，先按位置从小到大排序
-        sort_idx = jnp.argsort(state.position)
-        pos_sorted = state.position[sort_idx]
-        vel_sorted = state.velocity[sort_idx]
-        acc_sorted = state.acceleration[sort_idx]
-        tgt_sorted = state.target_pos[sort_idx]
-        acc_stop_sorted = state.acc_stop[sort_idx]
-        final_acc_sorted = state.final_acc[sort_idx]
-        params_sorted = IDMParams(
-            v0=state.params.v0[sort_idx],
-            T=state.params.T[sort_idx],
-            s0=state.params.s0[sort_idx],
-            a=state.params.a[sort_idx],
-            b=state.params.b[sort_idx],
-            delta=state.params.delta[sort_idx],
-            length=state.params.length[sort_idx],
-            rtime=state.params.rtime[sort_idx]
-        )
-        for i, (x, v, a, t) in enumerate(zip(pos_sorted, vel_sorted, acc_sorted, tgt_sorted)):
-            # 计算与前车的距离和速度差
-            if i < len(pos_sorted) - 1:
-                gap = pos_sorted[i+1] - x - params_sorted.length[i]
-                dv = v - vel_sorted[i+1]
-            else:
-                gap = float(100000)
-                dv = float(0)
-            row = {
-                "step": state.step_count,
-                "car_id": int(sort_idx[i]),
-                "position": float(x),
-                "velocity": float(v),
-                "acceleration": float(a),
-                "target_pos": float(t),
-                "gap_to_front": float(gap),
-                "dv_to_front": float(dv),
-                "acc_stop": float(acc_stop_sorted[i]),
-                "final_acc": float(final_acc_sorted[i]),
-                "v0": float(params_sorted.v0[i]),
-                "T": float(params_sorted.T[i]),
-                "s0": float(params_sorted.s0[i]),
-                "a_param": float(params_sorted.a[i]),
-                "b_param": float(params_sorted.b[i]),
-                "delta": float(params_sorted.delta[i]),
-                "length": float(params_sorted.length[i]),
-                "rtime": float(params_sorted.rtime[i]),
-                "crashed": state.crashed
-            }
-            log_rows.append(row)
-            if log_detail:
-                print(row)
-        # 可视化部分
-        fig, ax = plt.subplots(figsize=(18, 2))
-        ax.set_xlim(0, float(jnp.max(state.target_pos)) + 10)
-        ax.set_ylim(-1, 1)
-        for i, (x, v, t) in enumerate(zip(state.position, state.velocity, state.target_pos)):
-            ax.plot([x], [0], 'o', label=f"car{i} pos={float(x):.2f} v={float(v):.2f}")
-            ax.axvline(t, color='r', linestyle='--', alpha=0.5)
-            
-        ax.legend()
-        ax.set_title(f"step={state.step_count} crashed={state.crashed}")
+            # ax.axvline(t, color='r', linestyle='--', alpha=0.5) # 暂时注释掉目标位置显示，避免与红灯混淆
+
+        # 增加红灯显示
+        red_light_color = 'red' if state.red_light_state else 'green'
+        ax.axvline(state.red_light_pos, color=red_light_color, linestyle='-', linewidth=2, label=f"Red Light Pos: {state.red_light_pos:.2f}")
+
+        ax.legend(loc='upper left')
+        title = f"Step: {state.step_count} | Crashed: {state.crashed} | Red Light: {'ON' if state.red_light_state else 'OFF'} | Time Left: {state.red_light_remaining:.1f}s"
+        ax.set_title(title)
         plt.tight_layout()
         if save_gif:
             jpg_path = os.path.join(output_dir, f"frame_{state.step_count:05d}.jpg")
@@ -568,69 +482,12 @@ def test1():
     state = env.reset(rng, init_pos, init_vel,params)
     traj = env.rollout(state, max_steps=500, idm_log_csv="idm_step_log.csv")
     plot_traj(traj, save_gif=False, gif_path="idm_2cars_redlight.gif", save_csv=True, csv_path="traj_log.csv", log_detail=False)
+    # 输出每辆车通过红灯路口的时间
+    print("每辆车通过红灯路口的时间（秒）：")
+    for i, t in enumerate(traj[-1].time_to_vanish):
+        print(f"car{i}: {float(t):.2f}")
 #
-#j加入神经网络进行参数预测和训练
-def loss_fn(idm_params_flat):
-    # idm_params_flat: shape=(2*8,)  # 2辆车，每辆8个参数
-    params = IDMParams(
-        v0=idm_params_flat[0:2],
-        T=idm_params_flat[2:4],
-        s0=idm_params_flat[4:6],
-        a=idm_params_flat[6:8],
-        b=jnp.array([2.0, 2.0]),
-        delta=jnp.array([4.0, 4.0]),
-        length=jnp.array([5.0, 5.0]),
-        rtime=jnp.array([0.2, 0.2])
-    )
-    env = BraxIDMEnv(num_vehicles=2, dt=0.1)
-    init_pos = jnp.array([0.0, 20.0])
-    target_pos = jnp.array([50.0, 70.0])
-    rng = jax.random.PRNGKey(0)
-    state = env.reset(rng, init_pos, target_pos, params)
-    traj = env.rollout(state, max_steps=200)
-    # 以最后一步距离目标的误差为损失
-    final_state = traj[-1]
-    loss = jnp.sum(jnp.abs(final_state.position - final_state.target_pos))
-
-    return loss
-
-'''
-参考mdelsCollect4.py的设计，生成test2函数
-，参考mdelsCollect4.py的设计
-
-1.将车辆分为4类，分别为排队第一辆车（头车），排队第二辆车，排队第三辆车，其他车辆
-2.每类车辆使用都使用idm模型，但是参数不同（可变参数类型和范围参考modelCollect3）
-3.基于modelsCollect2中的simpleResnet模型，基于输入数据，预测4类车辆参数
-4.训练数据集生成方式参考modelsCollect.py
-5.模型训练是先用simple Resnet预测4类车辆的idm参数,然后根据4类车辆的idm参数，仿真模型预测车辆time_to vanish时间。训练目标是最小化time_to vanish预测误差
-6.训练不是用simple Resnet的预测time_t0_vanish，而是用仿真预测的time_to vanish时间和真实time_to vanish时间做mse损失
-7.注意保存仿真中间过程数据结果
-8.设置选项，是否启用print调试信息
-9.保存训练好的模型
-10.代码结构清晰，便于后续维护和扩展.例如将车辆分为5,6类等，增加需要训练的参数
-11.增加命令行参数，方便配置训练选项，例如是否启用print调试信息，训练轮数，学习率等
-12.增加日志记录功能，记录训练过程中的重要信息，例如损失值变化，模型保存路径等
-13.代码结果简单，不需要try except结构 ,不需要进行太多的错误处理
-14.输入数据就是 csv_path = 'trainsamples_lane_5_6_7.csv' 
-15.注意根据laneid,给出每条车道的intersection_pos
-16.使用tqdm显示训练进度
-17.注意仿真时，按照距离终点排序，将最近的3辆车分为1~3类，其余为4类，并为每辆车分配对应的IDM参数。
-18.注意参考pyGameInterface3中的TrafficSimulator和VehicleParams类，仿真模型预测车辆time_to vanish时间
-19.注意车辆的参数的变换范围参考modelsCollect3.py中的设置
-
-20.增加红灯位置和红灯状态。以及红灯剩余时间。
-21.车辆接近红灯位置时，停车等待红灯变绿
-22.红灯变绿后，车辆继续行驶，直至通过路口
-23.每辆车的idm参数可以不同,车辆
-24.记录每辆车的通过红灯时间time_to_vanish以及每一step的状态数据
-
-'''
-
-def test2():
-    pass
 #-------------------------------------------------------------- 
 ##主函数    
 if __name__ == "__main__":
     test1()############### 测试二车idm模型 ,看环境仿真效果 ##################
-
-

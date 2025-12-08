@@ -1,3 +1,4 @@
+
 '''
 
 参考modelsCollect3.py,modelsCollect.py,用keras实现
@@ -6,7 +7,7 @@
 3.基于modelsCollect2中的simpleResnet模型，基于输入数据，预测4类车辆参数
 4.训练数据集生成方式参考modelsCollect.py
 5.模型训练是先用simple Resnet预测4类车辆的idm参数,然后根据4类车辆的idm参数，仿真模型预测车辆time_to vanish时间。训练目标是最小化time_to vanish预测误差
-6.训练不是用simple Resnet的预测time_t0_vanish，而是用仿真预测的time_to vanish时间和真实time_to_vanish时间做mse损失
+6.训练不是用simple Resnet的预测time_t0_vanish，而是用仿真预测的time_to vanish时间和真实time_to vanish时间做mse损失
 7.注意保存仿真中间过程数据结果
 8.设置选项，是否启用print调试信息
 9.保存训练好的模型
@@ -22,12 +23,8 @@
 19.注意车辆的参数的变换范围参考modelsCollect3.py中的设置
 '''
 
-'''
-1.重新优化所有函数，keras，tf GradientTape等只关注本身resnet模型的前向和反向传播，不涉及仿真细节
-2.jax部分仅在仿真函数中使用，且仿真函数不参与梯度计算,jax仅作为一个黑盒仿真器使用，jax仅仅接受TF的输出参数做仿真，内部细节不涉及梯度计算
-3. 整个链路为:keras模型前向传播->仿真函数（jax黑盒）->损失计算(仿真模型输出time_to_vanish与实际time_to_vanish)->keras模型参数更新(jax不参与梯度计算)
 
-'''
+
 import os
 import sys
 import argparse
@@ -216,19 +213,20 @@ def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_type
 
     batch_size = nn_output_batch.shape[0]
     results = []
-
+    
     for i in range(batch_size):
+        # --- 修改开始 ---
         # 将 Tensor 转换为 Numpy 数组，而 columns 已经是 Python 对象
         args_tuple = (
             nn_output_batch[i].numpy(), 
             raw_data_batch[i].numpy(), 
             columns,  # 直接传递 Python 列表
-            param_bounds,  # 直接使用 numpy 数组
-            num_types  # 直接使用整数值
+            param_bounds.numpy(), 
+            num_types.numpy()
         )
+        # --- 修改结束 ---
         result = run_single_simulation(args_tuple)
         results.append(result)
-
     results = np.array(results, dtype=np.float32)
     return tf.convert_to_tensor(results, dtype=tf.float32)
   
@@ -310,41 +308,17 @@ def main(args):
     @tf.function
     def train_step(x_batch, y_batch, raw_batch):
         with tf.GradientTape() as tape:
-            # ResNet forward pass
             nn_output = model(x_batch, training=True)
-
-            # JAX simulation as a black-box function
-            predicted_times = tf.py_function(
-                func=lambda nn_out, raw: run_batch_simulation(
-                    nn_out, raw, param_bounds, num_types, columns=raw_columns_list
-                ),
-                inp=[nn_output, raw_batch],
-                Tout=tf.float32
-            )
-
-            # Loss computation
+            predicted_times = simulation_layer_batch(nn_output, raw_batch,  param_bounds, num_types,columns_list=raw_columns_list)
             loss = tf.reduce_mean(tf.square(predicted_times - y_batch))
-
-        # Backward pass and parameter update
         grads = tape.gradient(loss, model.trainable_variables)
         optimizer.apply_gradients(zip(grads, model.trainable_variables))
         return loss
 
     @tf.function
     def val_step(x_batch, y_batch, raw_batch):
-        # ResNet forward pass
         nn_output = model(x_batch, training=False)
-
-        # JAX simulation as a black-box function
-        predicted_times = tf.py_function(
-            func=lambda nn_out, raw: run_batch_simulation(
-                nn_out, raw, param_bounds, num_types, columns=raw_columns_list
-            ),
-            inp=[nn_output, raw_batch],
-            Tout=tf.float32
-        )
-
-        # Compute validation errors
+        predicted_times = simulation_layer_batch(nn_output, raw_batch,  param_bounds, num_types,columns_list=raw_columns_list)
         errors = predicted_times - y_batch
         return errors
 
