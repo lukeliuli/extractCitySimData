@@ -57,6 +57,7 @@ from pyGameBraxInterface4 import IDMParams, BraxIDMEnv,EnvState
 import time
 import os
 import jax
+from multiprocessing import Pool
 
 
 # 1. 日志与参数配置
@@ -218,7 +219,7 @@ def run_single_simulation(args_tuple):
     init_speed = jnp.array([row[f'car_speed_{i}'] for _, i in car_indices]) 
     state = env.reset(jax.random.PRNGKey(0), init_pos, init_speed, params)
     traj = env.rollout(state, max_steps=1500, idm_log_csv="idm_step_log.csv")
-
+    
     if main_car_rank == -1:
         # 主车未找到，返回一个较大的时间作为惩罚
         return np.float32(120.0)
@@ -244,7 +245,26 @@ def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_type
 
     batch_size = nn_output_batch.shape[0]
     results = []
+    
+    # 使用多进程池并行运行仿真
+    # 注意：Pool 的 processes 数量可以根据 CPU 核心数调整，这里使用 batch_size
+    # 如果 batch_size 很大，建议限制 processes 的最大值，例如 os.cpu_count()
+    num_processes = min(batch_size, os.cpu_count() or 1)
+    
+    with Pool(processes=num_processes) as pool:
+        args_list = [
+            (
+                nn_output_batch[i].numpy(),
+                raw_data_batch[i].numpy(),
+                columns,
+                param_bounds,
+                num_types
+            )
+            for i in range(batch_size)
+        ]
+        results = pool.map(run_single_simulation, args_list)
 
+    '''    
     for i in range(batch_size):
         # 将 Tensor 转换为 Numpy 数组，而 columns 已经是 Python 对象
         args_tuple = (
@@ -256,7 +276,7 @@ def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_type
         )
         result = run_single_simulation(args_tuple)
         results.append(result)
-
+    '''  
     results = np.array(results, dtype=np.float32)
     return tf.convert_to_tensor(results, dtype=tf.float32)
   

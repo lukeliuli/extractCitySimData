@@ -1,29 +1,12 @@
 #准备测试brax,物理可微模型
-'''
+import os
+os.environ['XLA_FLAGS'] = '--xla_force_host_platform_device_count=8'
 
-基于brax，生成一个独立的二个点的模型
-1.点是一维的，只具有位置和速度属性
-2.点就是一个方块，没有质量等属性。彼此不能重叠，一旦重叠就发生碰撞报错
-3.点只能在一维线上运动，不能离开这条线。只能向一个方向运行或者停止
-4.如果点的运动方向前面没有点，就按照idm跟车模型运动，预期速度是最大速度
-5.如果点的运动方向前面有点，就按照idm跟车模型运动
-6.设置红灯位置，点一旦接近预定的红灯位置位置，就停止运动，直到停止到预定位置。
-7.后面的点不能超过前面的点
-8.参考pyGameInterface3.py的写法，完成brax模型的编写。注意brax的环境编写方式和pyGameInterface3.py不一樣
-9.完成后，编写一个简单的测试脚本，测试二个点的运动情况，观察它们是否按照预期运动
-10.测试脚本中，设置点的初始位置和预定位置，观察它们的运动轨迹和最终位置
-11.把过程进行可视化，方便观察点的运动情况，同时保存为gif文件。设定开关控制是否保存gif
-12.每个点的idm参数可以自行设定，测试脚本中可以设置不同的参数进行测试
-13.模型中print和可视化参数设定开关控制是否保存，方便调试和观察
-14.注意留下接口，方便后续扩展更多点的模型
-15.注意留下接口，用于神经网络或者全局搜索方法（类似模拟退火）的调用，用于训练和获得最优idm参数。
-
-检查达成目标逻辑，应该是所有车辆都通过路口，并且没有发生碰撞。
-检查idm跟车模型逻辑，是否正确
-代码增加注释以及简洁一点
-设置目标位置为统一目标点1000，
-'''
 import jax
+jax.config.update('jax_platform_name', 'cpu')
+
+
+
 import jax.numpy as jnp
 from flax import struct
 from typing import Tuple, Dict, Any, Optional
@@ -72,6 +55,7 @@ class EnvState:
 # ==========================================
 # 2. 核心物理逻辑 (JAX Functional Style)
 # ==========================================
+#@jax.jit #用了jax.jit不能用log
 def compute_idm_acc(
     v: jnp.ndarray,
     v_front: jnp.ndarray,
@@ -104,6 +88,7 @@ def compute_idm_acc(
     idmacc = free_acc + interaction_acc
 
     # 日志记录
+    ''' #用了jax.jit不能用log
     if log_list is not None:
         v_np = np.asarray(v)
         v_front_np = np.asarray(v_front)
@@ -135,37 +120,33 @@ def compute_idm_acc(
                 'length': float(np.asarray(params.length)[i]),
                 'rtime': float(np.asarray(params.rtime)[i]),
             })
+    '''
     return idmacc
 
 
+
+#@jax.jit
 def compute_stopping_acc(
     v: jnp.ndarray,
     dist_to_target: jnp.ndarray,
     params: IDMParams
 ) -> jnp.ndarray:
-    """
-    计算为了在目标位置停止所需的加速度
-    只有当距离目标小于 3 倍当前车速时，才开始计算停止加速度，否则返回0
-    保持可微（避免if分支），用sigmoid平滑切换
-    """
-    # 距离目标的净距离
+  
+   
     net_dist = dist_to_target
-
 
     # 物理公式: v^2 = 2 * a * d  => a = -v^2 / (2d)
     req_acc = -(v ** 2) / (2.0 * jnp.maximum(net_dist, 0.01))
 
     # 限制最大减速度，防止数值爆炸，但允许紧急制动
-    
     stop_acc = jnp.maximum(req_acc, -9.0)
 
     # 如果距离非常近，强制急停（JAX兼容写法）
     stop_acc = jnp.where(net_dist <= 0, -9.0, stop_acc)
 
-    # 只有在掩码为1时才施加停止加速度，否则为0
     return stop_acc
 
-
+    
 # 距离目标位置越近的点为头车，为第一辆车
 # 可用于仿真前对车辆排序，确保IDM跟车关系正确
 
@@ -210,7 +191,7 @@ class BraxIDMEnv:
             final_acc=jnp.zeros(self.num_vehicles)
         )
 
-
+   
     def step(self, state: EnvState, action: Optional[jnp.ndarray] = None, idm_log_list: list = None) -> EnvState:
         """
         单步仿真，返回新状态。
@@ -335,15 +316,17 @@ class BraxIDMEnv:
         """
         traj = []
         idm_log_list = [] if idm_log_csv is not None else None
+        
         for _ in range(max_steps):
-            traj.append(state)
-            if state.crashed:
-                break
-            # 达成目标：所有车都已通过目标点
-            arrived = jnp.all(state.position - state.target_pos > 0.0)
-            if arrived:
-                break
-            state = self.step(state, idm_log_list=idm_log_list)
+                traj.append(state)
+                if state.crashed:
+                    break
+                # 达成目标：所有车都已通过目标点
+                arrived = jnp.all(state.position - state.target_pos > 10.0)
+                if arrived:
+                    break
+                state = self.step(state, idm_log_list=idm_log_list)
+       
 
         # 保存traj到csv
         traj_log = []
