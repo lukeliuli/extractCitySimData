@@ -250,7 +250,7 @@ def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_type
     # 注意：Pool 的 processes 数量可以根据 CPU 核心数调整，这里使用 batch_size
     # 如果 batch_size 很大，建议限制 processes 的最大值，例如 os.cpu_count()
     num_processes = min(batch_size, os.cpu_count() or 1)
-    
+    print(f"Using {num_processes} processes for parallel simulation.")
     with Pool(processes=num_processes) as pool:
         args_list = [
             (
