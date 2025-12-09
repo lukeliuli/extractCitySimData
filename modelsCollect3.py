@@ -27,7 +27,14 @@
 2.jax部分仅在仿真函数中使用，且仿真函数不参与梯度计算,jax仅作为一个黑盒仿真器使用，jax仅仅接受TF的输出参数做仿真，内部细节不涉及梯度计算
 3. 整个链路为:keras模型前向传播->仿真函数（jax黑盒）->损失计算(仿真模型输出time_to_vanish与实际time_to_vanish)->keras模型参数更新(jax不参与梯度计算)
 
+JAX多CPU/多线程设定:
+os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads=8"
+# 可选: jax.config.update("jax_platform_name", "cpu")
 '''
+JAX多CPU/多线程设定:
+os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads=8"
+#jax.config.update("jax_platform_name", "cpu")
+
 import os
 import sys
 import argparse
@@ -47,6 +54,8 @@ import jax.numpy as jnp
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from pyGameBraxInterface4 import IDMParams, BraxIDMEnv,EnvState
 import time
+import os
+import jax
 
 
 # 1. 日志与参数配置
