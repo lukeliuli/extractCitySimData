@@ -351,6 +351,13 @@ def main(args):
                 inp=[nn_output, raw_batch],
                 Tout=tf.float32
             )
+            
+            # 显式设置形状信息，帮助 TensorFlow 推断
+            predicted_times.set_shape([None])
+
+            # 确保 y_batch 和 predicted_times 都是 (batch, 1) 形状
+            y_batch = tf.reshape(y_batch, [-1, 1])
+            predicted_times = tf.reshape(predicted_times, [-1, 1])
 
             # Loss computation
             loss = tf.reduce_mean(tf.square(predicted_times - y_batch))
