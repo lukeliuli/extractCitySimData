@@ -232,8 +232,7 @@ def run_single_simulation(args_tuple):
         vanish_times = last_state.time_to_vanish
         main_car_vanish_time = vanish_times[main_car_rank]
        
-    for i, t in enumerate(traj[-1].time_to_vanish):
-        print(f"car{i}: {float(t):.2f}")
+
    
         return np.float32(main_car_vanish_time)
 
@@ -451,11 +450,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="使用Keras和交通仿真进行端到端模型训练")
     parser.add_argument('--csv_path', type=str, default='trainsamples_lane_5_6_7.csv', help='训练数据CSV文件路径')
     parser.add_argument('--epochs', type=int, default=10, help='训练轮数')
-    parser.add_argument('--batch_size', type=int, default=1,help='批处理大小')
+    parser.add_argument('--batch_size', type=int, default=8,help='批处理大小')
     parser.add_argument('--lr', type=float, default=0.001, help='学习率')
-    parser.add_argument('--test_size', type=float, default=0.01, help='验证集比例')
+    parser.add_argument('--test_size', type=float, default=0.9, help='验证集比例')
     parser.add_argument('--num_types', type=int, default=4, help='车辆类别数')
-    parser.add_argument('--unit', type=int, default=256, help='ResNet隐藏层单元数')
+    parser.add_argument('--unit', type=int, default=128, help='ResNet隐藏层单元数')
     parser.add_argument('--layNum', type=int, default=8, help='ResNet块数量')
     parser.add_argument('--log_path', type=str, default='training_log.log', help='日志文件路径')
     parser.add_argument('--debug', action='store_true', help='启用Debug级别的日志信息')
