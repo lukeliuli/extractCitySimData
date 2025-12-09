@@ -43,7 +43,7 @@ from sklearn.model_selection import train_test_split
 import jax
 import jax.numpy as jnp
 
-# 确保可以导入 pyGameInterface3
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from pyGameBraxInterface4 import IDMParams, BraxIDMEnv,EnvState
 
@@ -52,14 +52,26 @@ from pyGameBraxInterface4 import IDMParams, BraxIDMEnv,EnvState
 def setup_logger(log_path, debug=False):
     """配置日志记录器，同时输出到文件和控制台"""
     log_level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s [%(levelname)s] - %(message)s',
-        handlers=[
-            logging.FileHandler(log_path, mode='w'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    # 清除旧的处理程序，避免重复日志
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    # 文件处理程序
+    file_handler = logging.FileHandler(log_path, mode='w')
+    file_handler.setLevel(log_level)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] - %(message)s'))
+
+    # 控制台处理程序
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(log_level)
+    console_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] - %(message)s'))
+
+    # 添加处理程序到记录器
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
 
     #v0: float
     #T: float
@@ -194,7 +206,7 @@ def run_single_simulation(args_tuple):
     init_pos = jnp.array([row[f'car_position_{i}'] for _, i in car_indices])
     init_speed = jnp.array([row[f'car_speed_{i}'] for _, i in car_indices]) 
     state = env.reset(jax.random.PRNGKey(0), init_pos, init_speed, params)
-    traj = env.rollout(state, max_steps=500, idm_log_csv="idm_step_log.csv")
+    traj = env.rollout(state, max_steps=1500, idm_log_csv="idm_step_log.csv")
 
     if main_car_rank == -1:
         # 主车未找到，返回一个较大的时间作为惩罚
@@ -203,9 +215,14 @@ def run_single_simulation(args_tuple):
         # 从traj.info['vanish_times']中获取主车的vanish_time
     # 从traj中获得各个时刻的envState，从最后一个时刻获得主车的time_to vanish时间
         env_states = traj  # traj是EnvState的列表
+        # env_states 是 EnvState 的列表，最后一个元素包含最终的 time_to_vanish
         last_state = env_states[-1]
         vanish_times = last_state.time_to_vanish
         main_car_vanish_time = vanish_times[main_car_rank]
+       
+    for i, t in enumerate(traj[-1].time_to_vanish):
+        print(f"car{i}: {float(t):.2f}")
+   
         return np.float32(main_car_vanish_time)
 
 
@@ -289,7 +306,8 @@ def main(args):
 
     # 创建 tf.data.Dataset
     train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train, raw_train))
-    train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+    #train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+    train_dataset = train_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
 
     val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val, raw_val))
     val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
@@ -324,10 +342,17 @@ def main(args):
 
             # Loss computation
             loss = tf.reduce_mean(tf.square(predicted_times - y_batch))
-
+        
         # Backward pass and parameter update
         grads = tape.gradient(loss, model.trainable_variables)
         optimizer.apply_gradients(zip(grads, model.trainable_variables))
+        
+        # Use tf.print for debugging inside tf.function
+        
+        tf.print("Loss:", loss)
+        tf.print("Predicted times:", predicted_times)
+        tf.print("Actual times:", y_batch)
+        
         return loss
 
     @tf.function
@@ -352,11 +377,16 @@ def main(args):
         logging.info(f"===== Epoch {epoch + 1}/{args.epochs} =====")
         
         epoch_loss_avg = tf.keras.metrics.Mean()
-        pbar = tqdm(train_dataset, desc=f"训练 Epoch {epoch+1}")
-        for x_batch, y_batch, raw_batch in pbar:
+
+        # 不使用tqdm时，直接遍历数据集
+        for x_batch, y_batch, raw_batch in train_dataset:
             loss = train_step(x_batch, y_batch, raw_batch)
             epoch_loss_avg.update_state(loss)
-            pbar.set_postfix(loss=f"{epoch_loss_avg.result().numpy():.4f}")
+            # Logging outside tf.function, where .numpy() is available
+            logging.info(f"Loss: {loss.numpy():.4f}")
+            epoch_loss_avg.update_state(loss)
+
+      
 
         logging.info(f"Epoch {epoch+1} 训练完成, 平均损失: {epoch_loss_avg.result().numpy():.4f}")
 
@@ -380,9 +410,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="使用Keras和交通仿真进行端到端模型训练")
     parser.add_argument('--csv_path', type=str, default='trainsamples_lane_5_6_7.csv', help='训练数据CSV文件路径')
     parser.add_argument('--epochs', type=int, default=10, help='训练轮数')
-    parser.add_argument('--batch_size', type=int, default=2,help='批处理大小')
+    parser.add_argument('--batch_size', type=int, default=1,help='批处理大小')
     parser.add_argument('--lr', type=float, default=0.001, help='学习率')
-    parser.add_argument('--test_size', type=float, default=0.2, help='验证集比例')
+    parser.add_argument('--test_size', type=float, default=0.01, help='验证集比例')
     parser.add_argument('--num_types', type=int, default=4, help='车辆类别数')
     parser.add_argument('--unit', type=int, default=256, help='ResNet隐藏层单元数')
     parser.add_argument('--layNum', type=int, default=8, help='ResNet块数量')

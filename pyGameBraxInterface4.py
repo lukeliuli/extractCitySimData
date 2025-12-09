@@ -33,6 +33,7 @@ import os
 import numpy as np
 import pandas as pd
 
+import datetime
 # ==========================================
 # 1. 定义数据结构 (JAX PyTree)
 # ==========================================
@@ -191,7 +192,7 @@ class BraxIDMEnv:
 
     def reset(self, rng: jnp.ndarray, init_pos: jnp.ndarray,init_vel: jnp.ndarray, params: IDMParams) -> EnvState:
         """初始化环境，所有车辆目标点为1000，支持初始速度设定"""
-        target_pos = jnp.ones(self.num_vehicles) * 1000.0
+        target_pos = jnp.ones(self.num_vehicles) * 300.0
         return EnvState(
             position=init_pos,
             velocity=init_vel,
@@ -243,7 +244,7 @@ class BraxIDMEnv:
         # 红灯逻辑：如果红灯为红，且车辆距离红灯小于一定阈值，则目标点临时设为红灯位置
         red_light_arr = jnp.ones_like(pos) * state.red_light_pos
         near_red = (red_light_arr - pos) < vel * 3.0  # 3秒内能到达红灯位置
-        near_red2 = (red_light_arr - pos) < 20  # 30米内能到达红灯位置
+        near_red2 = (red_light_arr - pos) < 30  # 30米内能到达红灯位置
         not_passed_red = pos < state.red_light_pos
         near_red2 = near_red2 | near_red2
         stop_mask = near_red2 & not_passed_red & state.red_light_state
@@ -274,7 +275,7 @@ class BraxIDMEnv:
         final_acc = jnp.where(stop_mask, jnp.minimum(acc_idm, acc_stop), acc_idm)
         #final_acc = acc_idm
         # 平滑加速度
-        alpha = jnp.exp(-p_sorted.rtime / self.dt)
+        alpha = jnp.exp(-p_sorted.rtime/10/self.dt)
         smoothed_acc = alpha*final_acc + (1-alpha) * acc
         smoothed_acc = jnp.clip(smoothed_acc, -9.0, p_sorted.a)
       
@@ -287,7 +288,7 @@ class BraxIDMEnv:
         pos_diff = new_pos[1:] - new_pos[:-1]
         
         #前车减后车距离小于5.5,就是碰撞
-        is_crashed = jnp.any(-pos_diff < 5.5)
+        is_crashed = jnp.any(-pos_diff < 5)
         #rint(new_pos)
         #print(pos_diff)
 
@@ -343,11 +344,46 @@ class BraxIDMEnv:
             if arrived:
                 break
             state = self.step(state, idm_log_list=idm_log_list)
-        # 仿真结束后保存csv
+
+        # 保存traj到csv
+        traj_log = []
+        for state in traj:
+            for i in range(self.num_vehicles):
+                traj_log.append({
+                    "step": state.step_count,
+                    "car_id": i,
+                    "position": float(state.position[i]),
+                    "velocity": float(state.velocity[i]),
+                    "acceleration": float(state.acceleration[i]),
+                    "target_pos": float(state.target_pos[i]),
+                    "acc_stop": float(state.acc_stop[i]),
+                    "final_acc": float(state.final_acc[i]),
+                    "v0": float(state.params.v0[i]),
+                    "T": float(state.params.T[i]),
+                    "s0": float(state.params.s0[i]),
+                    "a_param": float(state.params.a[i]),
+                    "b_param": float(state.params.b[i]),
+                    "delta": float(state.params.delta[i]),
+                    "length": float(state.params.length[i]),
+                    "rtime": float(state.params.rtime[i]),
+                    "crashed": state.crashed,
+                    "front_car_id": int(state.front_car_id[i]),
+                    "red_light_pos": float(state.red_light_pos),
+                    "red_light_state": state.red_light_state,
+                    "red_light_remaining": float(state.red_light_remaining),
+                    "time_to_vanish": float(state.time_to_vanish[i])
+                })
+
+        df_traj = pd.DataFrame(traj_log)
+        now = datetime.datetime.now()
+        filename = f"traj_log_{now.strftime('%Y%m%d_%H%M%S')}.csv"
+        df_traj.to_csv(filename, index=False, float_format='%.3f')
+       
+       
         if idm_log_csv is not None and idm_log_list is not None:
-            import pandas as pd
+            filename = f"idm_log_{now.strftime('%Y%m%d_%H%M%S')}.csv"
             df = pd.DataFrame(idm_log_list)
-            df.to_csv(idm_log_csv, index=False,float_format='%.2f')
+            df.to_csv(filename, index=False,float_format='%.3f')
             #print(f"已保存IDM日志到 {idm_log_csv}")
         return traj
 
