@@ -32,6 +32,7 @@ os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=true intra_op_parallelis
 # 可选: jax.config.update("jax_platform_name", "cpu")
 '''
 #JAX多CPU/多线程设定:
+import os
 os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads=8"
 #jax.config.update("jax_platform_name", "cpu")
 
