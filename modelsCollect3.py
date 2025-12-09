@@ -46,6 +46,7 @@ import jax.numpy as jnp
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from pyGameBraxInterface4 import IDMParams, BraxIDMEnv,EnvState
+import time
 
 
 # 1. 日志与参数配置
@@ -327,6 +328,7 @@ def main(args):
 
     @tf.function
     def train_step(x_batch, y_batch, raw_batch):
+        start_time = time.time()
         with tf.GradientTape() as tape:
             # ResNet forward pass
             nn_output = model(x_batch, training=True)
@@ -348,11 +350,11 @@ def main(args):
         optimizer.apply_gradients(zip(grads, model.trainable_variables))
         
         # Use tf.print for debugging inside tf.function
-        
+        end_time = time.time()
         tf.print("Loss:", loss)
         tf.print("Predicted times:", predicted_times)
         tf.print("Actual times:", y_batch)
-        
+        tf.print("one batch time (s):", end_time - start_time)
         return loss
 
     @tf.function
