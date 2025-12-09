@@ -242,14 +242,14 @@ def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_type
     """串行运行批处理仿真"""
     if columns is None:
         raise ValueError("`columns` list was not provided to run_batch_simulation.")
-
+    start_time = time.time()
     batch_size = nn_output_batch.shape[0]
     results = []
     
     # 使用多进程池并行运行仿真
     # 注意：Pool 的 processes 数量可以根据 CPU 核心数调整，这里使用 batch_size
     # 如果 batch_size 很大，建议限制 processes 的最大值，例如 os.cpu_count()
-    num_processes = min(batch_size, os.cpu_count() or 1)
+    num_processes = min(batch_size, os.cpu_count() or 8)
     print(f"Using {num_processes} processes for parallel simulation.")
     with Pool(processes=num_processes) as pool:
         args_list = [
@@ -278,6 +278,8 @@ def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_type
         results.append(result)
     '''  
     results = np.array(results, dtype=np.float32)
+    end_time = time.time()
+    tf.print(f"Batch simulation time (s): {end_time - start_time}")
     return tf.convert_to_tensor(results, dtype=tf.float32)
   
 
@@ -358,7 +360,7 @@ def main(args):
 
     @tf.function
     def train_step(x_batch, y_batch, raw_batch):
-        start_time = time.time()
+        
         with tf.GradientTape() as tape:
             # ResNet forward pass
             nn_output = model(x_batch, training=True)
@@ -387,11 +389,11 @@ def main(args):
         optimizer.apply_gradients(zip(grads, model.trainable_variables))
         
         # Use tf.print for debugging inside tf.function
-        end_time = time.time()
+     
         tf.print("Loss:", loss)
         tf.print("Predicted times:", predicted_times)
         tf.print("Actual times:", y_batch)
-        tf.print("one batch time (s):", end_time - start_time)
+      
         return loss
 
     @tf.function
