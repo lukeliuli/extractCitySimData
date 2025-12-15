@@ -249,6 +249,9 @@ def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_type
     # 注意：Pool 的 processes 数量可以根据 CPU 核心数调整，这里使用 batch_size
     # 如果 batch_size 很大，建议限制 processes 的最大值，例如 os.cpu_count()
     num_processes = min(batch_size, os.cpu_count() or 8)
+
+    
+    
     print(f"Using {num_processes} processes for parallel simulation.")
     with Pool(processes=num_processes) as pool:
         args_list = [
@@ -262,6 +265,7 @@ def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_type
             for i in range(batch_size)
         ]
         results = pool.map(run_single_simulation, args_list)
+    
 
     '''    
     for i in range(batch_size):
@@ -276,7 +280,44 @@ def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_type
         result = run_single_simulation(args_tuple)
         results.append(result)
     '''  
+ 
+    ## 使用 pmap 并行仿真，因为vmap,pmap使用了的simulation函数必须是jax函数,但是实际上使用了pandas等非jax函数，
+    ## 注释掉pmap部分，改为多进程pool方式
+
+    '''
+    # pmap 适合多设备，多核，vmap 适合单机多线程
+    # 使用 JAX 的 pmap 实现多设备并行仿真
+    # pmap 需要输入 shape 的 batch 维度与设备数一致，通常用于多CPU/多GPU
+    # 如果设备数 < batch_size，需分批处理或补齐
+    # 转为 numpy
+    nn_output_np = nn_output_batch.numpy()
+    raw_data_np = raw_data_batch.numpy()
+    param_bounds_np = param_bounds
+    num_types_np = num_types
+
+    # pmap 只支持静态参数，columns/param_bounds/num_types 作为闭包变量传递
+    num_devices = jax.local_device_count()
+    if batch_size % num_devices != 0:
+        # 补齐到设备数的整数倍
+        pad = num_devices - (batch_size % num_devices)
+        nn_output_np = np.pad(nn_output_np, ((0, pad), (0, 0)), mode='edge')
+        raw_data_np = np.pad(raw_data_np, ((0, pad), (0, 0)), mode='edge')
+    else:
+        pad = 0
+
+    def jax_sim_fn(nn_output_np, row_data_np):
+        return  jax.device_get(
+                run_single_simulation((nn_output_np, row_data_np, columns, param_bounds_np, num_types_np))
+            )
+        
+
+    # pmap 轴为第一个维度
+    results = jax.pmap(jax_sim_fn)(nn_output_np, raw_data_np)
     results = np.array(results, dtype=np.float32)
+    if pad > 0:
+        results = results[:-pad]
+    '''
+    
     end_time = time.time()
     tf.print(f"Batch simulation time (s): {end_time - start_time}")
     return tf.convert_to_tensor(results, dtype=tf.float32)
