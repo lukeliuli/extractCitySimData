@@ -51,9 +51,13 @@ from sklearn.model_selection import train_test_split
 import jax
 import jax.numpy as jnp
 
-
+import jax
+import jax.numpy as jnp
+from pyGameBraxInterface4beta import IDMParams, EnvState, BraxIDMEnv
+from pyGameBraxInterface4gamma import initial_env_state_pure, rollout_pure
+from jax import tree_util
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from pyGameBraxInterface4 import IDMParams, BraxIDMEnv,EnvState
+
 import time
 import os
 import jax
@@ -146,7 +150,7 @@ def build_simple_resnet(input_dim, output_dim, unit=256, layNum=8):
     return model
 
 # 3. 仿真函数 (单个样本)
-def run_single_simulation(args_tuple):
+def run_single_simulation1(args_tuple):
     """为并行化设计的独立仿真函数"""
     # --- 修改开始 ---
     # 直接解包，columns 不再是 tensor
@@ -237,7 +241,90 @@ def run_single_simulation(args_tuple):
         return np.float32(main_car_vanish_time)
 
 
-def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_types, columns=None):
+def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_types, columns=None):
+    """
+    JAX纯函数版本，适用于vmap批量仿真。输入为单个样本，输出主车time_to_vanish。
+    nn_output: (num_types*6,)
+    raw_data: (features,)
+    columns: list[str]
+    param_bounds: (num_types, 6, 2)
+    num_types: int
+    """
+
+    start_time = time.time()
+    batch_size = nn_output_batch.shape[0]
+    results = []
+    statesAll = []
+
+    for i in range(batch_size):
+        nn_output = nn_output_batch[i].numpy()
+        raw_data = raw_data_batch[i].numpy()
+    
+        # 1. 参数解码
+        scaled_params = jnp.asarray(nn_output).reshape((num_types, 6))
+        param_bounds = jnp.asarray(param_bounds)
+        low = param_bounds[:, :, 0]
+        high = param_bounds[:, :, 1]
+        real_params = low + scaled_params * (high - low)
+        # 插入常量delta=4.0, length=5.0
+        def insert_constants(params):
+            return jnp.concatenate([params[:5], jnp.array([4.0, 5.0]), params[5:]])
+        idm_params_arr = jnp.stack([insert_constants(real_params[i]) for i in range(num_types)])
+        # 解析raw_data
+        row_dict = {col: raw_data[i] for i, col in enumerate(columns)}
+        intersection_pos = row_dict['intersection_pos']
+        car_indices = []
+        for i in range(20):
+            pos_col = f'car_position_{i}'
+            if pos_col in row_dict and row_dict[pos_col] != -1 and not jnp.isnan(row_dict[pos_col]):
+                car_indices.append((intersection_pos - row_dict[pos_col], i))
+            else:
+                car_indices.append((intersection_pos - row_dict[pos_col], i))
+
+        car_indices = sorted(car_indices)
+        num_cars = 20
+        def get_param(idx):
+            vtype = idx if idx < num_types else num_types - 1
+            return idm_params_arr[vtype]
+        params_stack = jnp.stack([get_param(rank) for rank in range(num_cars)])
+        v0 = params_stack[:, 0]
+        T = params_stack[:, 1]
+        s0 = params_stack[:, 2]
+        a = params_stack[:, 3]
+        b = params_stack[:, 4]
+        delta = params_stack[:, 5]
+        length = params_stack[:, 6]
+        rtime = params_stack[:, 7]
+        params = IDMParams(v0=v0, T=T, s0=s0, a=a, b=b, delta=delta, length=length, rtime=rtime)
+        init_pos = jnp.array([row_dict[f'car_position_{i}'] for _, i in car_indices])
+        init_speed = jnp.array([row_dict[f'car_speed_{i}'] for _, i in car_indices])
+        main_car_pos_value = row_dict['main_car_position']
+        main_car_rank = -1
+        for idx, (_, i) in enumerate(car_indices):
+            if jnp.abs(row_dict[f'car_position_{i}'] - main_car_pos_value) < 1e-3:
+                main_car_rank = idx
+                break
+        red_light_pos = float(row_dict['intersection_pos'])
+        red_light_duration = float(row_dict['redLightRemainingTime']) / 30.0
+        # 环境初始化
+   
+        state = initial_env_state_pure(num_vehicles=num_cars, dt=0.1, init_pos=init_pos, init_vel=init_speed, params=params, red_light_pos=red_light_pos, red_light_duration=red_light_duration)
+        statesAll.append((state, main_car_rank, num_cars))
+
+    statesAll = tree_util.tree_map(lambda *xs: jnp.stack(xs), *statesAll)
+
+    def get_time_to_vanish(stateAll):
+        state, main_car_rank, num_cars = stateAll
+        traj = rollout_pure(state, num_vehicles=num_cars, dt=0.1, max_steps=500)
+        return traj[-1].time_to_vanish[main_car_rank] 
+
+    results = jax.vmap(get_time_to_vanish)(statesAll)
+    end_time = time.time()
+    tf.print(f"JAX SIM Batch simulation time (s): {end_time - start_time}")
+    return tf.convert_to_tensor(results, dtype=tf.float32)
+            
+    
+def run_batch_simulation1(nn_output_batch, raw_data_batch, param_bounds, num_types, columns=None):
     """串行运行批处理仿真"""
     if columns is None:
         raise ValueError("`columns` list was not provided to run_batch_simulation.")
@@ -248,9 +335,9 @@ def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_type
     # 使用多进程池并行运行仿真
     # 注意：Pool 的 processes 数量可以根据 CPU 核心数调整，这里使用 batch_size
     # 如果 batch_size 很大，建议限制 processes 的最大值，例如 os.cpu_count()
-    num_processes = min(batch_size, os.cpu_count() or 8)
 
-    
+   
+    num_processes = min(batch_size, os.cpu_count() or 8)
     
     print(f"Using {num_processes} processes for parallel simulation.")
     with Pool(processes=num_processes) as pool:
@@ -264,69 +351,21 @@ def run_batch_simulation(nn_output_batch, raw_data_batch, param_bounds, num_type
             )
             for i in range(batch_size)
         ]
-        results = pool.map(run_single_simulation, args_list)
-    
-
-    '''    
-    for i in range(batch_size):
-        # 将 Tensor 转换为 Numpy 数组，而 columns 已经是 Python 对象
-        args_tuple = (
-            nn_output_batch[i].numpy(), 
-            raw_data_batch[i].numpy(), 
-            columns,  # 直接传递 Python 列表
-            param_bounds,  # 直接使用 numpy 数组
-            num_types  # 直接使用整数值
-        )
-        result = run_single_simulation(args_tuple)
-        results.append(result)
-    '''  
- 
-    ## 使用 pmap 并行仿真，因为vmap,pmap使用了的simulation函数必须是jax函数,但是实际上使用了pandas等非jax函数，
-    ## 注释掉pmap部分，改为多进程pool方式
-
-    '''
-    # pmap 适合多设备，多核，vmap 适合单机多线程
-    # 使用 JAX 的 pmap 实现多设备并行仿真
-    # pmap 需要输入 shape 的 batch 维度与设备数一致，通常用于多CPU/多GPU
-    # 如果设备数 < batch_size，需分批处理或补齐
-    # 转为 numpy
-    nn_output_np = nn_output_batch.numpy()
-    raw_data_np = raw_data_batch.numpy()
-    param_bounds_np = param_bounds
-    num_types_np = num_types
-
-    # pmap 只支持静态参数，columns/param_bounds/num_types 作为闭包变量传递
-    num_devices = jax.local_device_count()
-    if batch_size % num_devices != 0:
-        # 补齐到设备数的整数倍
-        pad = num_devices - (batch_size % num_devices)
-        nn_output_np = np.pad(nn_output_np, ((0, pad), (0, 0)), mode='edge')
-        raw_data_np = np.pad(raw_data_np, ((0, pad), (0, 0)), mode='edge')
-    else:
-        pad = 0
-
-    def jax_sim_fn(nn_output_np, row_data_np):
-        return  jax.device_get(
-                run_single_simulation((nn_output_np, row_data_np, columns, param_bounds_np, num_types_np))
-            )
-        
-
-    # pmap 轴为第一个维度
-    results = jax.pmap(jax_sim_fn)(nn_output_np, raw_data_np)
-    results = np.array(results, dtype=np.float32)
-    if pad > 0:
-        results = results[:-pad]
-    '''
-    
+        results = pool.map(run_single_simulation1, args_list)
+       
     end_time = time.time()
     tf.print(f"Batch simulation time (s): {end_time - start_time}")
     return tf.convert_to_tensor(results, dtype=tf.float32)
   
-
+'''
 def simulation_layer_batch(nn_output, raw_data, param_bounds, num_types,columns_list):
     """批处理仿真层，包裹py_function"""
    
-    func = lambda nn_out, r_data, p_bounds, n_types: run_batch_simulation(
+    #func = lambda nn_out, r_data, p_bounds, n_types: run_batch_simulation1(
+    #    nn_out, r_data, p_bounds, n_types, columns=columns_list
+    #)
+
+    func = lambda nn_out, r_data, p_bounds, n_types: run_batch_simulation2(
         nn_out, r_data, p_bounds, n_types, columns=columns_list
     )
 
@@ -340,7 +379,7 @@ def simulation_layer_batch(nn_output, raw_data, param_bounds, num_types,columns_
 
     predicted_times.set_shape([None])
     return predicted_times
-
+'''
 # 4. 主训练函数
 def main(args):
     setup_logger(args.log_path, args.debug)
@@ -407,7 +446,7 @@ def main(args):
 
             # JAX simulation as a black-box function
             predicted_times = tf.py_function(
-                func=lambda nn_out, raw: run_batch_simulation(
+                func=lambda nn_out, raw: run_batch_simulation2(
                     nn_out, raw, param_bounds, num_types, columns=raw_columns_list
                 ),
                 inp=[nn_output, raw_batch],
@@ -430,9 +469,9 @@ def main(args):
         
         # Use tf.print for debugging inside tf.function
      
-        tf.print("Loss:", loss)
-        tf.print("Predicted times:", predicted_times)
-        tf.print("Actual times:", y_batch)
+        #tf.print("Loss:", loss)
+        #tf.print("Predicted times:", predicted_times)
+        #tf.print("Actual times:", y_batch)
       
         return loss
 
@@ -443,7 +482,7 @@ def main(args):
 
         # JAX simulation as a black-box function
         predicted_times = tf.py_function(
-            func=lambda nn_out, raw: run_batch_simulation(
+            func=lambda nn_out, raw: run_batch_simulation2(
                 nn_out, raw, param_bounds, num_types, columns=raw_columns_list
             ),
             inp=[nn_output, raw_batch],
@@ -459,12 +498,18 @@ def main(args):
         
         epoch_loss_avg = tf.keras.metrics.Mean()
 
-        # 不使用tqdm时，直接遍历数据集
+        # 统计batch总数
+        total_batches = tf.data.experimental.cardinality(train_dataset).numpy()
+        batch_idx = 0
         for x_batch, y_batch, raw_batch in train_dataset:
+            batch_idx += 1
+            batch_start_time = time.time()
             loss = train_step(x_batch, y_batch, raw_batch)
+            batch_end_time = time.time()
             epoch_loss_avg.update_state(loss)
             # Logging outside tf.function, where .numpy() is available
-            logging.info(f"Loss: {loss.numpy():.4f}")
+            remaining_batches = total_batches - batch_idx
+            logging.info(f"Batch {batch_idx}/{total_batches}, Loss: {loss.numpy():.4f}, Time: {batch_end_time - batch_start_time:.3f}s, Remaining: {remaining_batches}")
             epoch_loss_avg.update_state(loss)
 
       
