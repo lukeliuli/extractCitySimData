@@ -4,8 +4,9 @@
 # 环境状态和车辆参数均定义为JAX的PyTree结构，便于与JAX生态系统集成。
 # 现对于pyGameBraxInterface4.py进行完善和删除不适合GPU和TPU和并行部分，确保其功能完整且符合预期。
 
-
 import jax
+jax.config.update('jax_enable_x64', False)  # 强制 float32
+
 import jax.numpy as jnp
 from flax import struct
 from typing import Tuple, Dict, Any, Optional
@@ -189,7 +190,7 @@ def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
 
     prev_time_to_vanish = state.time_to_vanish
     passed_mask = (state.position < state.red_light_pos) & (new_pos[inv_idx] >= state.red_light_pos)
-    new_time_to_vanish = jnp.where((prev_time_to_vanish < 0) & passed_mask, (state.step_count + 1) * dt, prev_time_to_vanish)
+    new_time_to_vanish = jnp.where((prev_time_to_vanish < 0) & passed_mask, (state.step_count + 1) * dt, prev_time_to_vanish) #注意这里乘以0.1了
     
     new_state = EnvState(
         position=new_pos[inv_idx],
@@ -253,16 +254,54 @@ def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
     return new_state
 
 
+def rollout_while(state: EnvState, num_vehicles: int, dt: float, max_steps: int = 1200) -> EnvState:
+    """
+    使用 jax.lax.while_loop 实现动态终止的 rollout。
+    一旦所有非虚拟车辆都通过红灯（time_to_vanish >= 0），立即终止。
+    返回最终 EnvState。
+    """
+    def cond_fn(carry):
+        state, step = carry
+        # 判断哪些车是虚拟车（不参与完成判断）
+        is_virtual = (state.position < -500) | (state.velocity < 0)
+        # 虚拟车视为已完成（time_to_vanish >= 0）
+        effective_time_to_vanish = jnp.where(is_virtual, 0.0, state.time_to_vanish)
+        all_passed = jnp.all(effective_time_to_vanish >= 0)
+        # 继续条件：未超步数 且 未全部通过
+        return (step < max_steps) & (~all_passed)
+
+    def body_fn(carry):
+        state, step = carry
+        new_state = step_pure(state, num_vehicles, dt)
+        return new_state, step + 1
+
+    final_state, _ = jax.lax.while_loop(cond_fn, body_fn, (state, 0))
+    return final_state
 
 
-def rollout_pure(state: EnvState, num_vehicles: int, dt: float, max_steps: int = 200):
+def rollout_pure(state: EnvState, num_vehicles: int, dt: float, max_steps: int = 1200):
     """
     纯函数版 rollout，所有依赖参数显式传递。
     """
-
     def scan_step(state, _):
-        new_state = step_pure(state, num_vehicles, dt)
+        
+        # 判断所有车辆是否都已通过红灯（即 time_to_vanish 全部 >= 0）
+        # 虚拟车不进行判断
+        is_virtual = (state.position < -500) | (state.velocity < 0)
+        # 虚拟车认定已经通过红灯
+        time_to_vanish = jnp.where(is_virtual, 0.0, state.time_to_vanish)
+        all_passed = jnp.all(time_to_vanish >= 0)
+        # 如果全部通过，则保持状态不变，否则继续仿真
+        new_state = jax.lax.cond(
+            all_passed,
+            lambda _: state,  # 不再推进
+            lambda _: step_pure(state, num_vehicles, dt),  # 正常推进
+            operand=None
+        )
         return new_state, state
+    #def scan_step(state, _):
+    #    new_state = step_pure(state, num_vehicles, dt)
+    #    return new_state, state
 
     steps = max_steps
     _, traj_stacked = jax.lax.scan(scan_step, state, None, length=steps)
@@ -359,7 +398,7 @@ def test3():
 
     # 由于rollout_pure返回的是list，不能直接vmap。我们只关心最后一个状态的time_to_vanish
     def get_time_to_vanish(state):
-        traj = rollout_pure(state, num_vehicles=2, dt=0.1, max_steps=500)
+        traj = rollout_pure(state, num_vehicles=2, dt=0.1, max_steps=1200)
         return traj[-1].time_to_vanish
 
     batched_time_to_vanish = jax.vmap(get_time_to_vanish)(states)

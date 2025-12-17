@@ -35,6 +35,9 @@ os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=true intra_op_parallelis
 import os
 os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=true intra_op_parallelism_threads=8"
 #jax.config.update("jax_platform_name", "cpu")
+# 在 modelsCollect3.py 和 pyGameBraxInterface4gamma.py 开头
+import jax
+jax.config.update('jax_enable_x64', False)  # 强制 float32
 
 import os
 import sys
@@ -54,7 +57,7 @@ import jax.numpy as jnp
 import jax
 import jax.numpy as jnp
 from pyGameBraxInterface4beta import IDMParams, EnvState, BraxIDMEnv
-from pyGameBraxInterface4gamma import initial_env_state_pure, rollout_pure
+from pyGameBraxInterface4gamma import initial_env_state_pure, rollout_pure,rollout_while
 from jax import tree_util
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -305,22 +308,34 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
                 main_car_rank = idx
                 break
         red_light_pos = float(row_dict['intersection_pos'])
-        red_light_duration = float(row_dict['redLightRemainingTime']) / 30.0
+        red_light_duration = float(row_dict['redLightRemainingTime']) / 30.0#注意这里除以30了
         # 环境初始化
    
         state = initial_env_state_pure(num_vehicles=num_cars, dt=0.1, init_pos=init_pos, init_vel=init_speed, params=params, red_light_pos=red_light_pos, red_light_duration=red_light_duration)
         statesAll.append((state, main_car_rank, num_cars))
 
     statesAll = tree_util.tree_map(lambda *xs: jnp.stack(xs), *statesAll)
+    
+    #使用rollout_pure计算，内部采用scan展开循环,但是发现scan效率不高,随着max_steps增加，效率下降明显
+    def get_time_to_vanish1(states): 
+        state, main_car_rank, num_cars = states
+        traj = rollout_pure(state, num_vehicles=num_cars, dt=0.1, max_steps=1200)
+        tf.print("tra[-1].step_count:", traj[-1].step_count)
+        return traj[-1].time_to_vanish[main_car_rank]#time_to_vanish计算时已经是秒了(step*0.1)
+    
+    #使用rollout_while计算，内部采用jax,while展开循环,可以提前终止
+    def get_time_to_vanish2(states):
+        # 替换原来的 rollout_pure 调用
+        state, main_car_rank, num_cars = states
+        final_state = rollout_while(state, num_vehicles=num_cars, dt=0.1, max_steps=1200)
+        main_car_vanish_time = final_state.time_to_vanish[main_car_rank]
+        #tf.print("final_state.step_count:", final_state.step_count)
+        return main_car_vanish_time#time_to_vanish计算时已经是秒了(step*0.1)
 
-    def get_time_to_vanish(stateAll):
-        state, main_car_rank, num_cars = stateAll
-        traj = rollout_pure(state, num_vehicles=num_cars, dt=0.1, max_steps=500)
-        return traj[-1].time_to_vanish[main_car_rank] 
-
-    results = jax.vmap(get_time_to_vanish)(statesAll)
+    results = jax.vmap(get_time_to_vanish2)(statesAll)
     end_time = time.time()
-    tf.print(f"JAX SIM Batch simulation time (s): {end_time - start_time}")
+    #tf.print(f"JAX SIM Batch sim time_to_vanish:\n {results}")
+    tf.print(f"JAX SIM Batch simulation time (s): {end_time - start_time:.2f}")
     return tf.convert_to_tensor(results, dtype=tf.float32)
             
     
@@ -407,7 +422,7 @@ def main(args):
     raw_cols = sorted(list(raw_cols_set)) # 排序以保证列顺序一致
 
     X = df[feature_cols].values.astype(np.float32)
-    y = (df['time_to_vanish'].values / 30.0).astype(np.float32)
+    y = (df['time_to_vanish'].values / 30.0).astype(np.float32)#注意已经除以30了
     raw_data_for_sim = df[raw_cols].values.astype(np.float32)
     # --- 修改结束 ---
 
@@ -509,17 +524,31 @@ def main(args):
             epoch_loss_avg.update_state(loss)
             # Logging outside tf.function, where .numpy() is available
             remaining_batches = total_batches - batch_idx
-            logging.info(f"Batch {batch_idx}/{total_batches}, Loss: {loss.numpy():.4f}, Time: {batch_end_time - batch_start_time:.3f}s, Remaining: {remaining_batches}")
+            logging.info(f"Batch {batch_idx}/{total_batches}, Loss: {loss.numpy():.4f}, \
+                         Time: {batch_end_time - batch_start_time:.3f}s, Remaining: {remaining_batches}")
             epoch_loss_avg.update_state(loss)
 
       
 
         logging.info(f"Epoch {epoch+1} 训练完成, 平均损失: {epoch_loss_avg.result().numpy():.4f}")
-
+        
+        # 验证阶段
+        val_loss_avg = tf.keras.metrics.Mean()
+        total_val_batches = tf.data.experimental.cardinality(val_dataset).numpy()
+        val_batch_idx = 0
         all_val_errors = []
-        for x_batch, y_batch, raw_batch in tqdm(val_dataset, desc=f"验证 Epoch {epoch+1}"):
+        for x_batch, y_batch, raw_batch in val_dataset:
+            val_batch_idx += 1
+            val_batch_start_time = time.time()
             errors = val_step(x_batch, y_batch, raw_batch)
             all_val_errors.append(errors.numpy())
+            val_batch_end_time = time.time()
+            # 计算当前batch的损失
+            val_loss = np.mean(np.square(errors.numpy()))
+            val_loss_avg.update_state(val_loss)
+            remaining_val_batches = total_val_batches - val_batch_idx
+            logging.info(f"Val Batch {val_batch_idx}/{total_val_batches}, Loss: {val_loss:.4f}, \
+                         Time: {val_batch_end_time - val_batch_start_time:.3f}s, Remaining: {remaining_val_batches}")
         
         val_errors = np.concatenate(all_val_errors)
         logging.info(f"Epoch {epoch+1} 验证完成 - 误差均值: {np.mean(val_errors):.4f}, RMSE: {np.sqrt(np.mean(np.square(val_errors))):.4f}")
@@ -548,7 +577,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     main(args)
 
-
+#python modelsCollect3.py --batch_size 16 --layNum 4
+#python modelsCollect3.py --batch_size 1280  --test_size 0.8 --epochs 100 --lr 0.0005 --unit 256 --layNum 8
 
 
 
