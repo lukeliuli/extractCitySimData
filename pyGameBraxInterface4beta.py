@@ -365,13 +365,15 @@ if __name__ == "__main__":
     t0 = time.time()
     test1()
     t1 = time.time()
-    print(f"test2:cpu: {t1-t0:.4f} s")
-
+    print(f"test1:cpu: {t1-t0:.4f} s")
+    
+   
     # 用 Pool 并行运行200次 test1，并统计 time_to_vanish
     def run_once(_):
         return np.array(test1())
 
     num_runs = 200
+    print(f"使用多进程并行运行test1{num_runs}次, os.cpu_count()={os.cpu_count()}")
     with Pool(os.cpu_count()) as pool:
         results = pool.map(run_once, range(num_runs))
 
