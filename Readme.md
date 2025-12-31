@@ -59,8 +59,25 @@
 - **modelCollect4.py**
     - 针对每辆车独立参数的 IDM 跟车模型，探索可微分物理模型的局限性。
     - 注：采用 pyGameInterface3，每辆车参数独立。
+    - 因为仿真物理模型无法可微，导致模型训练过程出现大问题，所以这个模型到此为止
 
----
+- **modelCollect3.py** 已经跑通
+    > - 针对每辆车独立参数的 IDM 跟车模型，探索可微分物理模型的局限性。
+    > - 所有函数都针对jax优化,输入输出都是,jnp.ndarray
+    > - 采用 pyGameBraxInterface4gamma，全部是函数，不用类（还用数据类）
+    > - 结果不好，因为迅训练过程中物理模型的LOSS变化不大。
+    > - nohup python modelsCollect3.py --batch_size 1280  --test_size 0.8 --epochs 100 --lr 0.0005 --unit 256 --layNum 8 &
+    > - 主要函数：
+        - run_single_simulation1  为并行化设计的独立仿真函数,用于以pool多进程的run_batch_simulation1调用
+        - run_batch_simulation1  pool多进程的进行仿真（不用jax,只用CPU）
+        - run_batch_simulation2  JAX纯函数版本，适用于vmap批量仿真。输入为batch样本，输出主车time_to_vanish。
+            - 调用 initial_env_state_pure和rollout_while等纯函数，进行jax batch函数仿真
+            - 
+
+- **pyGameBraxInterface4gamma**
+    - jax可微的仿真模型，全部用initial_env_state_pure，rollout_while 纯函数和jax优化
+    - 核心函数为 initial_env_state_pure，rollout_while，ompute_idm_acc，compute_stopping_acc，step_pure
+    - 其他函数为中间过程和测试
 
 ## 数据说明
 
