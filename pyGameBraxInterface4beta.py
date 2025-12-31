@@ -373,8 +373,8 @@ if __name__ == "__main__":
         return np.array(test1())
 
     num_runs = 200
-    print(f"使用多进程并行运行test1{num_runs}次, os.cpu_count()={os.cpu_count()}")
-    with Pool(os.cpu_count()) as pool:
+    print(f"使用多进程并行运行test1:{num_runs}次, os.cpu_count()={os.cpu_count()/2}")
+    with Pool(os.cpu_count()/2) as pool:
         results = pool.map(run_once, range(num_runs))
 
     results = np.array(results)  # shape: (num_runs, num_vehicles)
