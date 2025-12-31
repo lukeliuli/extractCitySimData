@@ -251,8 +251,6 @@ class BraxIDMEnv:
         # 传统for循环实现
         for _ in range(max_steps):
                 traj.append(state)
-                if state.crashed:
-                    break
                 # 达成目标：所有车都已通过目标点
                 arrived = jnp.all(state.position - state.red_light_pos > 10.0)
                 if arrived:
