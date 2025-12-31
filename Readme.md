@@ -58,7 +58,7 @@
 
 - **modelCollect4.py**
     - 针对每辆车独立参数的 IDM 跟车模型，探索可微分物理模型的局限性。
-    - 注：采用 pyGameInterface3，每辆车参数独立。
+    - 注：采用 pyGameInterface4beta，每辆车参数独立。
     - 因为仿真物理模型无法可微，导致模型训练过程出现大问题，所以这个模型到此为止
 
 - **modelCollect3.py** 已经跑通
@@ -78,6 +78,10 @@
     - jax可微的仿真模型，全部用initial_env_state_pure，rollout_while 纯函数和jax优化
     - 核心函数为 initial_env_state_pure，rollout_while，ompute_idm_acc，compute_stopping_acc，step_pure
     - 其他函数为中间过程和测试
+
+- **pyGameBraxInterface4beta**
+    - 不使用jax的特性，jnp就是np,方便调试和多进程仿真。
+
 
 ## 数据说明
 

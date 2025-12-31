@@ -1,14 +1,11 @@
-#准备测试brax,物理可微模型
-# pyGameBraxInterface4beta.py，基于JAX和Flax实现的IDM交通流模型环境，支持多车仿真、红绿灯逻辑和数据记录功能。
-# 该环境采用函数式编程风格，利用JAX的自动微分和JIT编译特性，实现高效的交通流仿真。
-# 环境状态和车辆参数均定义为JAX的PyTree结构，便于与JAX生态系统集成。
-# 现对于pyGameBraxInterface4.py进行完善和删除不适合GPU和TPU和并行部分，确保其功能完整且符合预期。
+# pyGameBraxInterface4beta.py,只用于CPU和进程环境仿真测试。
+# 不使用jax的特性，jnp就是np,方便调试和多进程仿真。
 
 
 import jax
 import jax.numpy as jnp
 from flax import struct
-from typing import Tuple, Dict, Any, Optional
+
 
 import os
 import numpy as np
@@ -109,119 +106,10 @@ def compute_stopping_acc(
     stop_acc = jnp.where(net_dist <= 0, -9.0, stop_acc)
     return stop_acc
     
-#@jax.jit,因为一般只有2到6辆车，具体效果不好
-def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
-    """
-    单步仿真纯函数，所有依赖参数显式传递。
-    """
-    N = num_vehicles
-    p = state.params
-
-    idx = jnp.argsort(-state.position)
-    pos = state.position[idx]
-    vel = state.velocity[idx]
-    acc = state.acceleration[idx]
-    tgt = state.target_pos[idx]
-    collision = state.collision[idx]
-    p_sorted = IDMParams(
-        v0=p.v0[idx], T=p.T[idx], s0=p.s0[idx], a=p.a[idx], b=p.b[idx],
-        delta=p.delta[idx], length=p.length[idx], rtime=p.rtime[idx]
-    )
-    inv_idx = jnp.argsort(idx)
-    front_car_id_sorted = jnp.full((len(idx),), -1, dtype=jnp.int32)
-    front_car_id_sorted = front_car_id_sorted.at[1:].set(idx[:-1])
-    front_car_id = jnp.empty_like(front_car_id_sorted)
-    front_car_id = front_car_id.at[inv_idx].set(front_car_id_sorted)
-
-    red_light_arr = jnp.ones_like(pos) * state.red_light_pos
-    near_red = (red_light_arr - pos) < vel * 3.0
-    near_red2 = (red_light_arr - pos) < 30
-    not_passed_red = pos < state.red_light_pos
-    near_red2 = near_red2 | near_red2
-    stop_mask = near_red2 & not_passed_red & state.red_light_state
-    tgt = jnp.where(stop_mask, state.red_light_pos, tgt)
-
-    pos_front = jnp.concatenate([jnp.array([1e9]), pos[0:-1]])
-    vel_front = jnp.concatenate([jnp.array([0.0]), vel[0:-1]])
-    gaps = pos_front - pos - p_sorted.length
-
-    acc_idm, free_acc, interaction_acc = compute_idm_acc(
-        vel, vel_front, gaps, p_sorted,
-        front_car_id=front_car_id_sorted
-    )
-
-    dist_to_target = tgt - pos - p_sorted.length / 2
-    acc_stop = compute_stopping_acc(vel, dist_to_target)
-
-    final_acc = jnp.where(stop_mask, jnp.minimum(acc_idm, acc_stop), acc_idm)
-    alpha = jnp.exp(-p_sorted.rtime / 10 / dt)
-    smoothed_acc = alpha * final_acc + (1 - alpha) * acc
-    smoothed_acc = jnp.clip(smoothed_acc, -9.0, p_sorted.a)
-
-    new_vel = jnp.maximum(vel + smoothed_acc * dt, 0.0)
-    new_pos = pos + new_vel * dt
-
-    pos_diff = new_pos[1:] - new_pos[:-1]
-   
-    collision = collision.at[1:].set(jnp.where(pos_diff < 5.5, 1.0, 0.0))
-
-    red_light_remaining = jnp.where(state.red_light_state, state.red_light_remaining - dt, 0.0)
-    red_light_switch = (state.red_light_state) & (red_light_remaining <= 0)
-    red_light_state = jnp.where(red_light_switch, False, state.red_light_state)
-    red_light_remaining = jnp.where(red_light_switch, 0.0, red_light_remaining)
-
-    prev_time_to_vanish = state.time_to_vanish
-    passed_mask = (state.position < state.red_light_pos) & (new_pos[inv_idx] >= state.red_light_pos)
-    new_time_to_vanish = jnp.where((prev_time_to_vanish < 0) & passed_mask, (state.step_count + 1) * dt, prev_time_to_vanish)
-
-    new_state = EnvState(
-        position=new_pos[inv_idx],
-        velocity=new_vel[inv_idx],
-        acceleration=smoothed_acc[inv_idx],
-        target_pos=tgt[inv_idx],
-        params=IDMParams(
-            v0=p_sorted.v0[inv_idx], T=p_sorted.T[inv_idx], s0=p_sorted.s0[inv_idx],
-            a=p_sorted.a[inv_idx], b=p_sorted.b[inv_idx], delta=p_sorted.delta[inv_idx],
-            length=p_sorted.length[inv_idx], rtime=p_sorted.rtime[inv_idx]
-        ),
-        step_count=state.step_count + 1,
-        collision=collision[inv_idx],
-        front_car_id=front_car_id,
-        red_light_pos=state.red_light_pos,
-        red_light_state=red_light_state,
-        red_light_remaining=red_light_remaining,
-        time_to_vanish=new_time_to_vanish,
-        acc_stop=acc_stop[inv_idx],
-        final_acc=final_acc[inv_idx],
-        v_front=vel_front[inv_idx],
-        dist_gap=gaps[inv_idx],
-        free_acc=free_acc[inv_idx],
-        interaction_acc=interaction_acc[inv_idx]
-    )
-    return new_state
 
 
 
 
-def rollout_pure(state: EnvState, num_vehicles: int, dt: float, max_steps: int = 200):
-    """
-    纯函数版 rollout，所有依赖参数显式传递。
-    """
-    def scan_step(state, _):
-        arrived = jnp.all(state.position - state.red_light_pos > 10.0)
-        done = arrived
-        def _keep(s):
-            return s
-        def _step(s):
-            return step_pure(s, num_vehicles, dt)
-        new_state = jax.lax.cond(done, _keep, _step, state)
-        return new_state, state
-
-    steps = max_steps
-    _, traj_stacked = jax.lax.scan(scan_step, state, None, length=steps)
-    traj = [jax.tree_util.tree_map(lambda x: x[i], traj_stacked) for i in range(steps)]
-    # 不再提前 break，始终返回完整 traj
-    return traj
 
 
 # ==========================================
@@ -237,7 +125,7 @@ class BraxIDMEnv:
 
     def reset(self, rng: jnp.ndarray, init_pos: jnp.ndarray,init_vel: jnp.ndarray, params: IDMParams) -> EnvState:
         """初始化环境，所有车辆目标点为300，支持初始速度设定"""
-        target_pos = jnp.ones(self.num_vehicles) * 300.0
+        target_pos = jnp.ones(self.num_vehicles) * 1300.0
         nEnvState =  EnvState(
             position=init_pos,
             velocity=init_vel,
@@ -269,7 +157,8 @@ class BraxIDMEnv:
         """
         N = self.num_vehicles
         p = state.params
-
+        dt = self.dt
+        num_vehicles = N
         idx = jnp.argsort(-state.position)
         pos = state.position[idx]
         vel = state.velocity[idx]
@@ -359,8 +248,6 @@ class BraxIDMEnv:
         新增：可选记录每步IDM输入和中间量到csv。
         """
         traj = []
-        
-        '''
         # 传统for循环实现
         for _ in range(max_steps):
                 traj.append(state)
@@ -371,32 +258,12 @@ class BraxIDMEnv:
                 if arrived:
                     break
                 state = self.step(state)
-        '''
         
         
-        def scan_step(state, _):
-            arrived = jnp.all(state.position - state.red_light_pos > 10.0)
-            done = arrived
-            def _keep(s):
-                return s
-            def _step(s):
-                return step_pure(s, self.num_vehicles, self.dt)
-            new_state = jax.lax.cond(done, _keep, _step, state)
-            return new_state, state
-
-        steps = max_steps
-        _, traj_stacked = jax.lax.scan(scan_step, state, None, length=steps)
-        # traj_stacked 是 EnvState 的 PyTree，每个字段 shape=(steps, ...)
-        # 转为 EnvState 列表
-        traj = [jax.tree_util.tree_map(lambda x: x[i], traj_stacked) for i in range(steps)]
-        # 只保留到第一个终止状态
-        for i, s in enumerate(traj):
-            if  jnp.all(s.position - s.red_light_pos > 10.0):
-                traj = traj[:i+1]
-                break
-
+  
 
         # 保存traj到csv
+        '''
         traj_log = []
         for state in traj:
             for i in range(self.num_vehicles):
@@ -430,12 +297,13 @@ class BraxIDMEnv:
                 
             })
 
-    #df_traj = pd.DataFrame(traj_log)
-    #now = datetime.datetime.now()
-    #filename = f"traj_log_{now.strftime('%Y%m%d_%H%M%S')}.csv"
-    #df_traj.to_csv(filename, index=False, float_format='%.3f')
-    
-    #print(f"已保存轨迹日志到 {filename}")
+        df_traj = pd.DataFrame(traj_log)
+        now = datetime.datetime.now()
+        filename = f"traj_log_{now.strftime('%Y%m%d_%H%M%S')}.csv"
+        df_traj.to_csv(filename, index=False, float_format='%.3f')
+        
+        print(f"已保存轨迹日志到 {filename}")
+        '''
     
         return traj
 
@@ -477,73 +345,15 @@ def test1():
     init_vel = jnp.array([50.0/3.6, 50.0/3.6])  # 车1在后，车0在前
     rng = jax.random.PRNGKey(0)
     state = env.reset(rng, init_pos, init_vel,params)
-    #traj = env.rollout(state, max_steps=500)
-    traj = rollout_pure(state, num_vehicles=2, dt=0.1, max_steps=500)
+    traj = env.rollout(state, max_steps=500)
+   
     #plot_traj(traj, save_gif=False, gif_path="idm_2cars_redlight.gif")
     # 输出每辆车通过红灯路口的时间
-    print("每辆车通过红灯路口的时间（秒）：")
-    for i, t in enumerate(traj[-1].time_to_vanish):
-        print(f"car{i}: {float(t):.2f}")
+    #print("每辆车通过红灯路口的时间（秒）：")
+    #for i, t in enumerate(traj[-1].time_to_vanish):
+    #    print(f"car{i}: {float(t):.2f}")
         
-from jax import tree_util
-def test2():
-    """测试二车idm模型 ,看环境仿真效果。 VMAP运行100组参数"""
-    
-    env = BraxIDMEnv(num_vehicles=2, dt=0.1, red_light_pos=100.0,red_light_duration=30.0)
-    # 初始位置和目标
-    init_pos = jnp.array([50.0/3.6*1+5, 0])  # 车1在后，车0在前.idm适合与稳定的跟车阶段，不是追赶阶段
-    init_vel = jnp.array([50.0/3.6, 50.0/3.6])  # 车1在后，车0在前
-    rng = jax.random.PRNGKey(0)
-    # 用vmap批量生成不同的params
-    batch_size = 10
-    rng = jax.random.PRNGKey(42)
-    # 随机生成100组参数
-    v0s = jax.random.uniform(rng, (batch_size, 2), minval=40.0/3.6, maxval=60.0/3.6)
-    Ts = jax.random.uniform(rng, (batch_size, 2), minval=0.8, maxval=1.8)
-    s0s = jax.random.uniform(rng, (batch_size, 2), minval=1.0, maxval=3.0)
-    a_s = jax.random.uniform(rng, (batch_size, 2), minval=1.0, maxval=3.0)
-    b_s = jax.random.uniform(rng, (batch_size, 2), minval=4.0, maxval=8.0)
-    deltas = jnp.ones((batch_size, 2)) * 4.0
-    lengths = jnp.ones((batch_size, 2)) * 5.0
-    rtimes = jnp.ones((batch_size, 2)) * 0.02
-    # 用for循环生成batch_size个不同的params,用env.reset生成初始状态
-    # 用for循环生成batch_size个不同的params,用env.reset生成初始状态
-    states = []
-    for i in range(batch_size):
-        state = env.reset(rng, init_pos, init_vel, IDMParams(
-            v0=v0s[i],
-            T=Ts[i],
-            s0=s0s[i],
-            a=a_s[i],
-            b=b_s[i],
-            delta=deltas[i],
-            length=lengths[i],
-            rtime=rtimes[i]
-        ))
-        states.append(state)
-
-    
-    states = tree_util.tree_map(lambda *xs: jnp.stack(xs), *states)
-    # 用vmap批量 rollout_pure
-
-    # 由于rollout_pure返回的是list，不能直接vmap。我们只关心最后一个状态的time_to_vanish
-    def get_time_to_vanish(state):
-        traj = rollout_pure(state, num_vehicles=2, dt=0.1, max_steps=500)
-        return traj[-1].time_to_vanish
-
-    batched_time_to_vanish = jax.vmap(get_time_to_vanish)(states)
-    # 计算每辆车通过红灯的平均时间（忽略未通过的车辆，即time_to_vanish < 0的不用计入平均值）
-    mean_time = jnp.where(
-        batched_time_to_vanish >= 0,
-        batched_time_to_vanish,
-        jnp.nan
-    ).mean(axis=0)
-    print("每辆车通过红灯的平均时间（秒）：")
-    for i, t in enumerate(mean_time):
-        print(f"car{i}: {float(t):.2f}")
-    
-
-#
+    return traj[-1].time_to_vanish
 #-------------------------------------------------------------- 
 ##主函数    
 import time
@@ -555,49 +365,25 @@ if __name__ == "__main__":
     
     jax.config.update('jax_platform_name', 'cpu')
     t0 = time.time()
-    test2()
+    test1()
     t1 = time.time()
     print(f"test2:cpu: {t1-t0:.4f} s")
 
-    jax.config.update('jax_platform_name', 'gpu')
-    t0 = time.time()
-    test2()
-    t1 = time.time()
-    print(f"test2:gpu: {t1-t0:.4f} s")
-    
-    jax.config.update('jax_platform_name', 'cpu')
-    t0 = time.time()
-    test1()
-    t1 = time.time()
-    print(f"cpu: {t1-t0:.4f} s")
+    # 用 Pool 并行运行200次 test1，并统计 time_to_vanish
+    def run_once(_):
+        return np.array(test1())
+
+    num_runs = 200
+    with Pool(os.cpu_count()) as pool:
+        results = pool.map(run_once, range(num_runs))
+
+    results = np.array(results)  # shape: (num_runs, num_vehicles)
+    print("每辆车通过红灯路口的时间（秒）：")
+    for car_id in range(results.shape[1]):
+        times = results[:, car_id]
+        print(f"car{car_id}: 平均时间 = {np.mean(times):.2f} s, 所有时间 = {times.round(2)}")
+    print(f"200次并行运行总耗时: {time.time()-t1:.2f} s")
 
     
-    jax.config.update('jax_platform_name', 'gpu')
-    t0 = time.time()
-    test1()
-    t1 = time.time()
-    print(f"test1:gpu: {t1-t0:.4f} s")
-
-
-
-    
-
-   
-    # 设置JAX使用8个CPU核心
-    #os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
-    
-    #jax.config.update('jax_platform_name', 'cpu')
-    #num_processes = min(os.cpu_count(),8)
-    #t0 = time.time()
-    #def run_test1(_):
-    #    test1()############### 测试二车idm模型 ,看环境仿真效果 ##################
-
-    #with Pool(num_processes ) as pool:
-    #    pool.map(run_test1, range(10))
-  
-    
-    #t1 = time.time()
-    #print(f"CPU: {t1-t0:.4f} s")
-
 
 
