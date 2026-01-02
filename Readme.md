@@ -81,6 +81,7 @@
 
 - **pyGameBraxInterface4beta**
     - 不使用jax的特性，jnp就是np,方便调试和多进程仿真。
+    - main函数用pool测试CPU并行和dt
 
 
 ## 数据说明

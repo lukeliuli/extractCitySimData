@@ -1,9 +1,8 @@
 '''
 
 参考modelsCollect3.py,做如下改进:
-1.优化代码用多进程池并行仿真,提升批处理仿真速度
-2.dt=0.5,提高速度
-3.查查bug
+1.dt=0.5,提高速度
+2.查查bug
 '''
 
 import os
@@ -22,9 +21,7 @@ import jax.numpy as jnp
 from jax import tree_util
 import time
 import os
-import jax
-from multiprocessing import Pool
-from pyGameBraxInterface4beta import BraxIDMEnv
+import random
 from pyGameBraxInterface4gamma import IDMParams, EnvState,initial_env_state_pure, rollout_pure,rollout_while
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -114,101 +111,9 @@ def build_simple_resnet(input_dim, output_dim, unit=256, layNum=8):
     model = Model(inputs=inp, outputs=out)
     return model
 
-# 3. 仿真函数 (单个样本)
-def run_single_simulation1(args_tuple):
-    """为并行化设计的独立仿真函数"""
-    # --- 修改开始 ---
-    # 直接解包，columns 不再是 tensor
-    nn_output_np, row_data_np, columns, param_bounds_np, num_types_np = args_tuple
-    # --- 修改结束 ---
-    
-    row = pd.Series(row_data_np, index=columns)
-   
-    scaled_params = nn_output_np.reshape(num_types_np, 6)
-    low, high = param_bounds_np[:, :, 0], param_bounds_np[:, :, 1]
-    real_params = low + scaled_params * (high - low)
-
-    idm_params_dict = {}
-    for i in range(num_types_np):
-        # real_params[i] is [v0, T, s0, a, b, rtime]
-        # 我们需要 [v0, T, s0, a, b, delta, length, rtime]
-        # 将常量 delta=4.0 和 length=5.0 插入
-        params_with_constants = np.insert(real_params[i], 5, [4.0, 5.0]) 
-        idm_params_dict[i] = params_with_constants 
-      
-    intersection_pos = row['intersection_pos']
-    car_indices = []
-
-    #安装距离终点排序车辆
-    for i in range(20):
-        pos_col = f'car_position_{i}'
-        if pos_col in row and row[pos_col] != -1 and not pd.isna(row[pos_col]):
-            car_indices.append((intersection_pos - row[pos_col], i))
-    car_indices.sort()
-    #car_indices中存储的是(距离终点距离,车辆索引),车辆索引为car_position_i中的i
-    #car_indices.sort(),为根据距离终点距离排序，距离终点最近的车辆排在最前面
-    
-    # 根据车辆类别分配对应的IDM参数，组装为BraxIDMEnv需要的params
-    num_cars = len(car_indices)
-    params_dict = {k: [] for k in ['v0', 'T', 's0', 'a', 'b', 'delta', 'length', 'rtime']}
-    for rank, (_, i) in enumerate(car_indices):
-        vtype = rank if rank < num_types_np else num_types_np - 1
-        car_params = idm_params_dict[vtype]
-        params_dict['v0'].append(car_params[0])
-        params_dict['T'].append(car_params[1])
-        params_dict['s0'].append(car_params[2])
-        params_dict['a'].append(car_params[3])
-        params_dict['b'].append(car_params[4])
-        params_dict['delta'].append(car_params[5])
-        params_dict['length'].append(car_params[6])
-        params_dict['rtime'].append(car_params[7])
-
-    # 转换为jnp.array
-    params = IDMParams(
-        v0=jnp.array(params_dict['v0']),
-        T=jnp.array(params_dict['T']),
-        s0=jnp.array(params_dict['s0']),
-        a=jnp.array(params_dict['a']),
-        b=jnp.array(params_dict['b']),
-        delta=jnp.array(params_dict['delta']),
-        length=jnp.array(params_dict['length']),
-        rtime=jnp.array(params_dict['rtime'])
-    )
-    
-    # 找到主车在 car_indices 中的索引
-    main_car_pos_value = row['main_car_position']
-    main_car_rank = -1
-    for idx, (_, i) in enumerate(car_indices):#car_indices中存储的是(距离终点距离,索引)，车辆索引为car_position_i中的i
-        if abs(row[f'car_position_{i}'] - main_car_pos_value) < 1e-3:
-            main_car_rank = idx
-            break
-    # main_car_rank 即主车在排序后的位置（距离终点最近的为0），如果未找到则为-1
-    # main_car_rank 为car_indices,init_pos和init_speed中的存储位置,而不是car_position_i中的i
-    
-    env = BraxIDMEnv(num_vehicles=len(car_indices), dt=0.1, red_light_pos=intersection_pos, red_light_duration=row['redLightRemainingTime']/30)
-    init_pos = jnp.array([row[f'car_position_{i}'] for _, i in car_indices])
-    init_speed = jnp.array([row[f'car_speed_{i}'] for _, i in car_indices]) 
-    state = env.reset(jax.random.PRNGKey(0), init_pos, init_speed, params)
-    traj = env.rollout(state, max_steps=1500, idm_log_csv="idm_step_log.csv")
-    
-    if main_car_rank == -1:
-        # 主车未找到，返回一个较大的时间作为惩罚
-        return np.float32(120.0)
-    else:
-        # 从traj.info['vanish_times']中获取主车的vanish_time
-    # 从traj中获得各个时刻的envState，从最后一个时刻获得主车的time_to vanish时间
-        env_states = traj  # traj是EnvState的列表
-        # env_states 是 EnvState 的列表，最后一个元素包含最终的 time_to_vanish
-        last_state = env_states[-1]
-        vanish_times = last_state.time_to_vanish
-        main_car_vanish_time = vanish_times[main_car_rank]
-       
-
-   
-        return np.float32(main_car_vanish_time)
 
 
-def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_types, columns=None):
+def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_types, columns=None,dt=0.5):
     """
     JAX纯函数版本，适用于vmap批量仿真。输入为单个样本，输出主车time_to_vanish。
     nn_output: (num_types*6,)
@@ -246,7 +151,8 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
             if pos_col in row_dict and row_dict[pos_col] != -1 and not jnp.isnan(row_dict[pos_col]):
                 car_indices.append((intersection_pos - row_dict[pos_col], i))
             else:
-                car_indices.append((intersection_pos - row_dict[pos_col], i))
+                car_indices.append((intersection_pos - row_dict[pos_col]*random.randint(1000,2000), i))
+                # 对于缺失车辆，给它一个负的较远的距离，确保排序靠后，距离红绿灯较远
 
         car_indices = sorted(car_indices)
         num_cars = 20
@@ -269,13 +175,14 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         main_car_rank = -1
         for idx, (_, i) in enumerate(car_indices):
             if jnp.abs(row_dict[f'car_position_{i}'] - main_car_pos_value) < 1e-3:
-                main_car_rank = idx
+                main_car_rank = idx #idx为car_indices,init_pos和init_speed中的存储位置
                 break
+
         red_light_pos = float(row_dict['intersection_pos'])
         red_light_duration = float(row_dict['redLightRemainingTime']) / 30.0#注意这里除以30了
         # 环境初始化
    
-        state = initial_env_state_pure(num_vehicles=num_cars, dt=0.1, init_pos=init_pos, init_vel=init_speed, params=params, red_light_pos=red_light_pos, red_light_duration=red_light_duration)
+        state = initial_env_state_pure(num_vehicles=num_cars, dt=dt, init_pos=init_pos, init_vel=init_speed, params=params, red_light_pos=red_light_pos, red_light_duration=red_light_duration)
         statesAll.append((state, main_car_rank, num_cars))
 
     statesAll = tree_util.tree_map(lambda *xs: jnp.stack(xs), *statesAll)
@@ -283,7 +190,7 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
     #使用rollout_pure计算，内部采用scan展开循环,但是发现scan效率不高,随着max_steps增加，效率下降明显
     def get_time_to_vanish1(states): 
         state, main_car_rank, num_cars = states
-        traj = rollout_pure(state, num_vehicles=num_cars, dt=0.1, max_steps=1200)
+        traj = rollout_pure(state, num_vehicles=num_cars, dt=dt, max_steps=1200)
         tf.print("tra[-1].step_count:", traj[-1].step_count)
         return traj[-1].time_to_vanish[main_car_rank]#time_to_vanish计算时已经是秒了(step*0.1)
     
@@ -291,7 +198,7 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
     def get_time_to_vanish2(states):
         # 替换原来的 rollout_pure 调用
         state, main_car_rank, num_cars = states
-        final_state = rollout_while(state, num_vehicles=num_cars, dt=0.1, max_steps=1200)
+        final_state = rollout_while(state, num_vehicles=num_cars, dt=dt, max_steps=1200)
         main_car_vanish_time = final_state.time_to_vanish[main_car_rank]
         #tf.print("final_state.step_count:", final_state.step_count)
         return main_car_vanish_time#time_to_vanish计算时已经是秒了(step*0.1)
@@ -303,62 +210,8 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
     return tf.convert_to_tensor(results, dtype=tf.float32)
             
     
-def run_batch_simulation1(nn_output_batch, raw_data_batch, param_bounds, num_types, columns=None):
-    """串行运行批处理仿真"""
-    if columns is None:
-        raise ValueError("`columns` list was not provided to run_batch_simulation.")
-    start_time = time.time()
-    batch_size = nn_output_batch.shape[0]
-    results = []
-    
-    # 使用多进程池并行运行仿真
-    # 注意：Pool 的 processes 数量可以根据 CPU 核心数调整，这里使用 batch_size
-    # 如果 batch_size 很大，建议限制 processes 的最大值，例如 os.cpu_count()
 
-   
-    num_processes = min(batch_size, os.cpu_count() or 8)
-    
-    print(f"Using {num_processes} processes for parallel simulation.")
-    with Pool(processes=num_processes) as pool:
-        args_list = [
-            (
-                nn_output_batch[i].numpy(),
-                raw_data_batch[i].numpy(),
-                columns,
-                param_bounds,
-                num_types
-            )
-            for i in range(batch_size)
-        ]
-        results = pool.map(run_single_simulation1, args_list)
-       
-    end_time = time.time()
-    tf.print(f"Batch simulation time (s): {end_time - start_time}")
-    return tf.convert_to_tensor(results, dtype=tf.float32)
-  
-'''
-def simulation_layer_batch(nn_output, raw_data, param_bounds, num_types,columns_list):
-    """批处理仿真层，包裹py_function"""
-   
-    #func = lambda nn_out, r_data, p_bounds, n_types: run_batch_simulation1(
-    #    nn_out, r_data, p_bounds, n_types, columns=columns_list
-    #)
-
-    func = lambda nn_out, r_data, p_bounds, n_types: run_batch_simulation2(
-        nn_out, r_data, p_bounds, n_types, columns=columns_list
-    )
-
-    predicted_times = tf.py_function(
-        func=func,
-        # 从 inp 中移除 'columns'
-        inp=[nn_output, raw_data, param_bounds, num_types],
-        Tout=tf.float32
-    )
-    # 确保输出有正确的形状
-
-    predicted_times.set_shape([None])
-    return predicted_times
-'''
+# -------------------------- 三种方案耗时测试函数 --------------------------
 # 4. 主训练函数
 def main(args):
     setup_logger(args.log_path, args.debug)
@@ -367,8 +220,12 @@ def main(args):
     logging.info(f"从 {args.csv_path} 加载数据...")
     df = pd.read_csv(args.csv_path).dropna()
     
+    
     lane_pos_map = {5: 53.05, 6: 53.13, 7: 53.30}
     df['intersection_pos'] = df['lane'].map(lane_pos_map)
+
+    dt = args.dt
+    logging.info(f"使用时间步长 dt={dt} 进行仿真")
   
     # --- 修改开始 ---
     # 明确区分特征列和传递给仿真的原始数据列
@@ -426,7 +283,7 @@ def main(args):
             # JAX simulation as a black-box function
             predicted_times = tf.py_function(
                 func=lambda nn_out, raw: run_batch_simulation2(
-                    nn_out, raw, param_bounds, num_types, columns=raw_columns_list
+                    nn_out, raw, param_bounds, num_types, columns=raw_columns_list,dt=dt
                 ),
                 inp=[nn_output, raw_batch],
                 Tout=tf.float32
@@ -462,7 +319,7 @@ def main(args):
         # JAX simulation as a black-box function
         predicted_times = tf.py_function(
             func=lambda nn_out, raw: run_batch_simulation2(
-                nn_out, raw, param_bounds, num_types, columns=raw_columns_list
+                nn_out, raw, param_bounds, num_types, columns=raw_columns_list,dt=dt
             ),
             inp=[nn_output, raw_batch],
             Tout=tf.float32
@@ -537,12 +394,12 @@ if __name__ == "__main__":
     parser.add_argument('--layNum', type=int, default=8, help='ResNet块数量')
     parser.add_argument('--log_path', type=str, default='training_log.log', help='日志文件路径')
     parser.add_argument('--debug', action='store_true', help='启用Debug级别的日志信息')
-    
+    parser.add_argument('--dt', type=float, default=0.5, help='仿真时间步长')
     args = parser.parse_args()
     main(args)
 
-#python modelsCollect3.py --batch_size 16 --layNum 4
-#python modelsCollect3.py --batch_size 1280  --test_size 0.8 --epochs 100 --lr 0.0005 --unit 256 --layNum 8
+#python modelsCollect4.py --batch_size 16 --layNum 4
+#python modelsCollect4.py --batch_size 64 --test_size 0.9 --epochs 100 --lr 0.005 --unit 256 --layNum 8 --dt 0.5
 
 
 

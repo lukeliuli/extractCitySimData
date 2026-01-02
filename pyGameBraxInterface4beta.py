@@ -321,7 +321,7 @@ def plot_traj(traj, save_gif=False, gif_path="idm_traj.gif"):
 
 
 ##########################################
-# 测试二车idm模型 ,看环境仿真效果
+# 测试二车idm模型 ,看环境仿真效果,也测试pool多进程仿真。
 ##########################################
 def test1():
     """测试二车idm模型 ,看环境仿真效果。 测试中"""
@@ -335,7 +335,7 @@ def test1():
         length=jnp.array([5.0, 5.0]),
         rtime=jnp.array([0.02, 0.02])
     )
-    env = BraxIDMEnv(num_vehicles=2, dt=0.1, red_light_pos=100.0,red_light_duration=30.0)
+    env = BraxIDMEnv(num_vehicles=2, dt=0.5, red_light_pos=100.0,red_light_duration=30.0)
     
     
     # 初始位置和目标
@@ -352,6 +352,88 @@ def test1():
     #    print(f"car{i}: {float(t):.2f}")
         
     return traj[-1].time_to_vanish
+
+
+##########################################
+# 测试多车idm模型，以及不同参数模型 ,看环境仿真效果,也测试pool多进程仿真。
+##########################################
+import random
+
+def run_once_batch(args):
+    idx, init_pos, init_vel, v0, T, s0, a, b, delta, length, rtime, N_vehicle, dt, red_light_pos, red_light_duration = args
+    params = IDMParams(
+        v0=v0,
+        T=T,
+        s0=s0,
+        a=a,
+        b=b,
+        delta=delta,
+        length=length,
+        rtime=rtime
+    )
+    env = BraxIDMEnv(num_vehicles=N_vehicle, dt=dt, red_light_pos=red_light_pos, red_light_duration=red_light_duration)
+    rng = jax.random.PRNGKey(idx)
+    state = env.reset(rng, init_pos, init_vel, params)
+    traj = env.rollout(state, max_steps=1500)
+    return np.array(traj[-1].time_to_vanish)
+
+def test2(dt,num_vehicles,batch_size):
+    """测试多车idm模型 ,看环境仿真效果。 测试中"""
+    rng0= random.randint(0,1e9)
+    rng = jax.random.PRNGKey(rng0)
+    # 随机生成100组参数
+    N_vehicle = num_vehicles
+    init_pos0 = jax.random.uniform(rng, (batch_size, N_vehicle), minval=5.0, maxval=60.0)  # 例如在0~20米内随机
+    init_vel0 = jax.random.uniform(rng, (batch_size, N_vehicle), minval=45/3.6,maxval=50/3.6)# 例如在0~10m/s内随机
+    v0s = jax.random.uniform(rng, (batch_size, N_vehicle), minval=40.0/3.6, maxval=60.0/3.6)
+    Ts = jax.random.uniform(rng, (batch_size, N_vehicle), minval=0.8, maxval=1.8)
+    s0s = jax.random.uniform(rng, (batch_size, N_vehicle), minval=1.0, maxval=3.0)
+    a_s = jax.random.uniform(rng, (batch_size, N_vehicle), minval=1.0, maxval=3.0)
+    b_s = jax.random.uniform(rng, (batch_size, N_vehicle), minval=4.0, maxval=8.0)
+    deltas = jnp.ones((batch_size, N_vehicle)) * 4.0
+    lengths = jnp.ones((batch_size, N_vehicle)) * 5.0
+    rtimes = jnp.ones((batch_size, N_vehicle)) * 0.02
+    red_light_pos = 100.0
+    red_light_duration = 30.0
+    dt = 0.5
+
+    # 组装参数
+    args_list = []
+    for i in range(batch_size):
+        args_list.append((
+            i,
+            init_pos0[i],
+            init_vel0[i],
+            v0s[i],
+            Ts[i],
+            s0s[i],
+            a_s[i],
+            b_s[i],
+            deltas[i],
+            lengths[i],
+            rtimes[i],
+            N_vehicle,
+            dt,
+            red_light_pos,
+            red_light_duration
+        ))
+
+    num_threads = min(os.cpu_count()-1, batch_size)
+    print(f"使用多进程并行运行test2: batch_size={batch_size}, num_threads={num_threads}")
+    with Pool(num_threads) as pool:
+        results = pool.map(run_once_batch, args_list)
+
+    results = np.array(results)  # shape: (batch_size, num_vehicles)
+    print("每辆车通过红灯路口的时间（秒）：")
+    for car_id in range(results.shape[1]):
+        times = results[:, car_id]
+        print(f"car{car_id}: 平均时间 = {np.mean(times):.2f} s, 所有时间 = {times.round(2)}")
+    print(f"{batch_size}次并行运行完成")
+    return results
+
+   
+
+
 #-------------------------------------------------------------- 
 ##主函数    
 import time
@@ -372,9 +454,11 @@ if __name__ == "__main__":
     def run_once(_):
         return np.array(test1())
 
-    num_runs = 200
-    print(f"使用多进程并行运行test1:{num_runs}次, os.cpu_count()={os.cpu_count()/2}")
-    with Pool(os.cpu_count()/2) as pool:
+    num_runs = 10
+    num_threads = int(os.cpu_count()/2)
+    num_threads = os.cpu_count()-1
+    print(f"使用多进程并行运行test1:{num_runs}次,num_threads={num_threads}")
+    with Pool(num_threads) as pool:
         results = pool.map(run_once, range(num_runs))
 
     results = np.array(results)  # shape: (num_runs, num_vehicles)
@@ -382,8 +466,15 @@ if __name__ == "__main__":
     for car_id in range(results.shape[1]):
         times = results[:, car_id]
         print(f"car{car_id}: 平均时间 = {np.mean(times):.2f} s, 所有时间 = {times.round(2)}")
-    print(f"200次并行运行总耗时: {time.time()-t1:.2f} s")
+    print(f"{num_runs}次并行运行总耗时: {time.time()-t1:.2f} s")
 
     
 
-
+    ##测试多车idm模型 ,看环境仿真效果。 测试中
+    print(f"\n{'-'*10}\n使用多进程并行运行test2")
+    batch_size = 20 
+    num_vehicles = 3
+    t0 = time.time()
+    test2(dt=0.5,num_vehicles=num_vehicles,batch_size=batch_size)
+    t1 = time.time()
+    print(f"test2:cpu: {t1-t0:.4f} s)")

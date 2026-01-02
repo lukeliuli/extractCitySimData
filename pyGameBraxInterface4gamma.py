@@ -374,7 +374,7 @@ def test3():
     rtimes = jnp.ones((batch_size, N_vehicle)) * 0.02
     red_light_pos = 100.0
     red_light_duration = 30.0
-    dt = 0.1
+    dt = 0.5
     
 
 
@@ -398,7 +398,7 @@ def test3():
 
     # 由于rollout_pure返回的是list，不能直接vmap。我们只关心最后一个状态的time_to_vanish
     def get_time_to_vanish(state):
-        traj = rollout_pure(state, num_vehicles=2, dt=0.1, max_steps=1200)
+        traj = rollout_pure(state, num_vehicles=2, dt=dt, max_steps=1200)
         return traj[-1].time_to_vanish
 
     batched_time_to_vanish = jax.vmap(get_time_to_vanish)(states)
@@ -413,13 +413,13 @@ def test3():
         print(f"car{i}: {float(t):.2f}")
     
 def test4():
-    """测试二车idm模型 ,看环境仿真效果。 测试中"""
+    """测试多车idm模型 ,看环境仿真效果。 测试中"""
     batch_size = 1
     rng0= random.randint(0,1e9)
     rng = jax.random.PRNGKey(rng0)
     # 随机生成100组参数
-    N_vehicle = 20
-    init_pos0 = jax.random.uniform(rng, (batch_size, N_vehicle), minval=5.0, maxval=30.0)  # 例如在0~20米内随机
+    N_vehicle = 8
+    init_pos0 = jax.random.uniform(rng, (batch_size, N_vehicle), minval=5.0, maxval=70.0)  # 例如在0~20米内随机
     init_vel0 = jax.random.uniform(rng, (batch_size, N_vehicle), minval=45/3.6,maxval=50/3.6)# 例如在0~10m/s内随机
     v0s = jax.random.uniform(rng, (batch_size, N_vehicle), minval=40.0/3.6, maxval=60.0/3.6)
     Ts = jax.random.uniform(rng, (batch_size, N_vehicle), minval=0.8, maxval=1.8)
@@ -431,7 +431,7 @@ def test4():
     rtimes = jnp.ones((batch_size, N_vehicle)) * 0.02
     red_light_pos = 100.0
     red_light_duration = 20.0
-    dt = 0.1
+    dt = 0.5
     
     init_pos0 = init_pos0.at[:, 8:N_vehicle].set(-1000.0)
     init_vel0 = init_vel0.at[:, 8:N_vehicle].set(-10.0)
@@ -456,7 +456,7 @@ def test4():
 
     # 由于rollout_pure返回的是list，不能直接vmap。我们只关心最后一个状态的time_to_vanish
     def get_time_to_vanish(state):
-        traj = rollout_pure(state, num_vehicles=N_vehicle, dt=0.1, max_steps=500)
+        traj = rollout_pure(state, num_vehicles=N_vehicle, dt=dt, max_steps=500)
         return traj[-1].time_to_vanish
 
     batched_time_to_vanish = jax.vmap(get_time_to_vanish)(states)
