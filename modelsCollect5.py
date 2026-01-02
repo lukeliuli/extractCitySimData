@@ -1,8 +1,9 @@
 '''
 
-参考modelsCollect3.py,做如下改进:
-1.dt=0.5,提高速度
-2.查查bug
+参考modelsCollect4.py,做如下改进:
+1.数据增强：将随机去掉一个车辆位置和速度数据，模拟传感器丢失数据的情况，增强模型鲁棒性。
+2.物理模型改进：如果出现车辆丢失，就加入虚拟车，进行仿真。以及车辆丢失识别方法
+3.识别模型改进：ResNet模型中，加入车辆丢失识别
 '''
 
 import os
@@ -26,12 +27,6 @@ from pyGameBraxInterface4gamma import IDMParams, EnvState,initial_env_state_pure
 from sklearn.cluster import KMeans
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-def format_tensor(tensor, decimals=1):
-    """格式化张量到指定小数位数"""
-    # 乘以 10^decimals，取整，再除以 10^decimals
-    factor = tf.constant(10 ** decimals, dtype=tensor.dtype)
-    rounded = tf.round(tensor * factor) / factor
-    return rounded
 
 # 1. 日志与参数配置
 def setup_logger(log_path, debug=False):
@@ -83,24 +78,22 @@ def get_param_bounds(num_types):
 # 2. Keras 模型定义 (优化)
 def build_simple_resnet(input_dim, output_dim, unit=256, layNum=8):
     """构建一个优化的ResNet模型，调整了BN和ReLU的位置"""
-    
-
     def resnet_block(x, units):
         shortcut = x
-
+        
         # 第一个 Dense -> BN -> ReLU
         y = Dense(units)(x)
         y = BatchNormalization()(y)
         y = ReLU()(y)
-
+        
         # 第二个 Dense -> BN
         y = Dense(units)(y)
         y = BatchNormalization()(y)
-
+        
         # 如果维度不匹配，使用1x1卷积调整shortcut
         if shortcut.shape[-1] != units:
             shortcut = Dense(units)(shortcut)
-
+            
         # Add & 最后的ReLU
         y = Add()([shortcut, y])
         y = ReLU()(y)
@@ -111,10 +104,10 @@ def build_simple_resnet(input_dim, output_dim, unit=256, layNum=8):
     x = Dense(unit)(inp)
     x = BatchNormalization()(x)
     x = ReLU()(x)
-
+    
     for _ in range(layNum):
         x = resnet_block(x, unit)
-
+        
     # 输出层使用sigmoid激活，将输出限制在(0, 1)范围，便于后续缩放
     out = Dense(output_dim, activation='sigmoid')(x)
     model = Model(inputs=inp, outputs=out)
@@ -151,7 +144,6 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         def insert_constants(params):
             return jnp.concatenate([params[:5], jnp.array([4.0, 5.0]), params[5:]])
         idm_params_arr = jnp.stack([insert_constants(real_params[i]) for i in range(num_types)])
-        #tf.print(batch_size,i,"IDM Params for types:\n", idm_params_arr)
         # 解析raw_data
         row_dict = {col: raw_data[i] for i, col in enumerate(columns)}
         intersection_pos = row_dict['intersection_pos']
@@ -231,9 +223,8 @@ def main(args):
     df = pd.read_csv(args.csv_path).dropna()
     
     #--------------------------------------------------------------------------------------------------------
-    # 随机提取args.nC个样本，尽可能保证样本多样性
-    numSamples = args.nC
-    if len(df) > numSamples:
+    # 随机提取1000个样本，尽可能保证样本多样性
+    if len(df) > 1000:
         # 先用KMeans聚类，保证多样性
         sample_features = df[[c for c in df.columns if 'car_position_' in c or 'car_speed_' in c]].values
         n_clusters = min(100, len(df) // 10)
@@ -244,11 +235,11 @@ def main(args):
             cluster_idx = np.where(cluster_labels == cluster)[0]
             if len(cluster_idx) > 0:
                 # 每个簇随机采样一定数量
-                n = max(1, int(numSamples / n_clusters))
+                n = max(1, int(1000 / n_clusters))
                 chosen = np.random.choice(cluster_idx, size=min(n, len(cluster_idx)), replace=False)
                 sampled_indices.extend(chosen)
         # 如果不足1000个，再随机补齐
-        if len(sampled_indices) < numSamples:
+        if len(sampled_indices) < 1000:
             remaining = list(set(range(len(df))) - set(sampled_indices))
             extra = np.random.choice(remaining, size=1000 - len(sampled_indices), replace=False)
             sampled_indices.extend(extra)
@@ -303,16 +294,7 @@ def main(args):
     num_types = args.num_types
     output_dim = num_types * 6
     model = build_simple_resnet(X_train.shape[1], output_dim, args.unit, args.layNum)
-
-    # 使用学习率调度器，开始时学习率较高，然后逐渐降低
-    initial_learning_rate = args.lr
-    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate,
-        decay_steps=100,  # 每100步衰减
-        decay_rate=0.99,  # 每次衰减到95%
-        staircase=True
-    )
-    optimizer = Adam(learning_rate=lr_schedule)
+    optimizer = Adam(learning_rate=args.lr)
    
     param_bounds = get_param_bounds(num_types)
   
@@ -326,7 +308,7 @@ def main(args):
         with tf.GradientTape() as tape:
             # ResNet forward pass
             nn_output = model(x_batch, training=True)
-            
+
             # JAX simulation as a black-box function
             predicted_times = tf.py_function(
                 func=lambda nn_out, raw: run_batch_simulation2(
@@ -337,27 +319,29 @@ def main(args):
             )
             
             # 显式设置形状信息，帮助 TensorFlow 推断
-            # predicted_times 来自JAX函数，需要明确设置形状
-            batch_size = tf.shape(y_batch)[0]  # 获取批次大小
-            predicted_times = tf.reshape(predicted_times, [batch_size])  # Reshape to [batch_size]
-            y_batch = tf.reshape(y_batch, [batch_size])  # Reshape to [batch_size]
+            predicted_times.set_shape([None])
 
-            # Loss computation with MSE + MAE for better convergence
-            # Loss computation with MSE for stable gradients
+            # 确保 y_batch 和 predicted_times 都是 (batch, 1) 形状
+            y_batch = tf.reshape(y_batch, [-1, 1])
+            predicted_times = tf.reshape(predicted_times, [-1, 1])
+
+            # Loss computation
             loss = tf.reduce_mean(tf.square(predicted_times - y_batch))
-        
-        # Backward pass and parameter update with gradient clipping
+            
+        # Backward pass and parameter update
         grads = tape.gradient(loss, model.trainable_variables)
-        # Apply gradient clipping to prevent gradient explosion
-        clipped_grads = [tf.clip_by_norm(grad, 1.0) if grad is not None else grad for grad in grads]
-        optimizer.apply_gradients(zip(clipped_grads, model.trainable_variables))
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
         
-        #tf.print("\n==================== Batch Training Info output:vanish Time ")
-        #tf.print("Loss:", loss, summarize=-1)
-        # predicted_times and y_batch are already 1D, so stack them directly
-        #combined_tensor = tf.stack([predicted_times, y_batch], axis=0)  # Shape: [2, batch_size]
-        #tf.print("Predicted & Actual times [Pred; Act]:\n", format_tensor(combined_tensor), summarize=-1)
-        #tf.print("============================================================")
+        # Use tf.print for debugging inside tf.function
+        
+        tf.print("==================== Batch Training Info ====================")
+        tf.print("Loss:", loss, summarize=-1)
+        tf.print("Predicted times:", predicted_times, summarize=-1)
+        tf.print("Actual times:", y_batch, summarize=-1)
+        tf.print("============================================================")
+        #tf.print("Loss:", loss)
+        #tf.print("Predicted times:", predicted_times)
+        #tf.print("Actual times:", y_batch)
       
         return loss
 
@@ -375,15 +359,8 @@ def main(args):
             Tout=tf.float32
         )
 
-        # 显式设置形状信息，帮助 TensorFlow 推断
-        # predicted_times 来自JAX函数，需要明确设置形状
-        batch_size = tf.shape(y_batch)[0]  # 获取批次大小
-        predicted_times = tf.reshape(predicted_times, [batch_size])  # Reshape to [batch_size]
-        y_batch = tf.reshape(y_batch, [batch_size])  # Reshape to [batch_size]
-
         # Compute validation errors
         errors = predicted_times - y_batch
-
         return errors
 
     for epoch in range(args.epochs):
@@ -404,43 +381,37 @@ def main(args):
             remaining_batches = total_batches - batch_idx
             logging.info(f"Batch {batch_idx}/{total_batches}, Loss: {loss.numpy():.4f}, \
                          Time: {batch_end_time - batch_start_time:.3f}s, Remaining: {remaining_batches}")
+            epoch_loss_avg.update_state(loss)
 
+      
 
         logging.info(f"Epoch {epoch+1} 训练完成, 平均损失: {epoch_loss_avg.result().numpy():.4f}")
-
-        # 每20个epoch进行一次验证
-        if epoch % 20 == 0 or epoch == args.epochs - 1:  # 在第0, 20, 40,...个epoch以及最后一个epoch验证
-            val_loss_avg = tf.keras.metrics.Mean()
-            total_val_batches = tf.data.experimental.cardinality(val_dataset).numpy()
-            val_batch_idx = 0
-            all_val_errors = []
-            for x_batch, y_batch, raw_batch in val_dataset:
-                val_batch_idx += 1
-                val_batch_start_time = time.time()
-                errors = val_step(x_batch, y_batch, raw_batch)
-                errors_np = errors.numpy()
-                all_val_errors.append(errors_np)
-                val_batch_end_time = time.time()
-                # 计算当前batch的损失
-                val_loss = np.mean(np.square(errors_np))
-                val_loss_avg.update_state(val_loss)
-                remaining_val_batches = total_val_batches - val_batch_idx
-                logging.info(f"Val Batch {val_batch_idx}/{total_val_batches}, Loss: {val_loss:.4f}, \
-                             Time: {val_batch_end_time - val_batch_start_time:.3f}s, Remaining: {remaining_val_batches}")
-
-            val_errors = np.concatenate([arr.flatten() for arr in all_val_errors])
-            logging.info(f"Epoch {epoch+1} 验证完成 - 误差均值: {np.mean(val_errors):.4f}, RMSE: {np.sqrt(np.mean(np.square(val_errors))):.4f}")
-
-            model_path = f"model_epoch_{epoch+1}.h5"
-            model.save(model_path)
-            # Save validation errors
-            np.save(f"validation_errors_epoch_{epoch+1}.npy", val_errors)
-            logging.info(f"模型已保存至 {model_path}")
-        else:
-            # 非验证epoch也保存模型，但不进行验证
-            model_path = f"model_epoch_{epoch+1}.h5"
-            model.save(model_path)
-            logging.info(f"模型已保存至 {model_path}")
+        
+        # 验证阶段
+        val_loss_avg = tf.keras.metrics.Mean()
+        total_val_batches = tf.data.experimental.cardinality(val_dataset).numpy()
+        val_batch_idx = 0
+        all_val_errors = []
+        for x_batch, y_batch, raw_batch in val_dataset:
+            val_batch_idx += 1
+            val_batch_start_time = time.time()
+            errors = val_step(x_batch, y_batch, raw_batch)
+            all_val_errors.append(errors.numpy())
+            val_batch_end_time = time.time()
+            # 计算当前batch的损失
+            val_loss = np.mean(np.square(errors.numpy()))
+            val_loss_avg.update_state(val_loss)
+            remaining_val_batches = total_val_batches - val_batch_idx
+            logging.info(f"Val Batch {val_batch_idx}/{total_val_batches}, Loss: {val_loss:.4f}, \
+                         Time: {val_batch_end_time - val_batch_start_time:.3f}s, Remaining: {remaining_val_batches}")
+        
+        val_errors = np.concatenate(all_val_errors)
+        logging.info(f"Epoch {epoch+1} 验证完成 - 误差均值: {np.mean(val_errors):.4f}, RMSE: {np.sqrt(np.mean(np.square(val_errors))):.4f}")
+        
+        model_path = f"model_epoch_{epoch+1}.h5"
+        model.save(model_path)
+        np.save(f"validation_errors_epoch_{epoch+1}.npy", val_errors)
+        logging.info(f"模型已保存至 {model_path}")
 
     logging.info("训练全部完成!")
 
@@ -458,7 +429,6 @@ if __name__ == "__main__":
     parser.add_argument('--log_path', type=str, default='training_log.log', help='日志文件路径')
     parser.add_argument('--debug', action='store_true', help='启用Debug级别的日志信息')
     parser.add_argument('--dt', type=float, default=0.5, help='仿真时间步长')
-    parser.add_argument('--nC', type=float, default=100, help='Kmeans聚类数量，用于样本多样性选择')
     args = parser.parse_args()
     main(args)
 
