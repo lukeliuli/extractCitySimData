@@ -23,6 +23,7 @@ import time
 import os
 import random
 from pyGameBraxInterface4gamma import IDMParams, EnvState,initial_env_state_pure, rollout_pure,rollout_while
+from sklearn.cluster import KMeans
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -190,7 +191,7 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
     #使用rollout_pure计算，内部采用scan展开循环,但是发现scan效率不高,随着max_steps增加，效率下降明显
     def get_time_to_vanish1(states): 
         state, main_car_rank, num_cars = states
-        traj = rollout_pure(state, num_vehicles=num_cars, dt=dt, max_steps=1200)
+        traj = rollout_pure(state, num_vehicles=num_cars, dt=dt, max_steps=int(120/dt))
         tf.print("tra[-1].step_count:", traj[-1].step_count)
         return traj[-1].time_to_vanish[main_car_rank]#time_to_vanish计算时已经是秒了(step*0.1)
     
@@ -198,7 +199,7 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
     def get_time_to_vanish2(states):
         # 替换原来的 rollout_pure 调用
         state, main_car_rank, num_cars = states
-        final_state = rollout_while(state, num_vehicles=num_cars, dt=dt, max_steps=1200)
+        final_state = rollout_while(state, num_vehicles=num_cars, dt=dt,  max_steps=int(120/dt))
         main_car_vanish_time = final_state.time_to_vanish[main_car_rank]
         #tf.print("final_state.step_count:", final_state.step_count)
         return main_car_vanish_time#time_to_vanish计算时已经是秒了(step*0.1)
@@ -220,7 +221,34 @@ def main(args):
     logging.info(f"从 {args.csv_path} 加载数据...")
     df = pd.read_csv(args.csv_path).dropna()
     
-    
+    #--------------------------------------------------------------------------------------------------------
+    # 随机提取1000个样本，尽可能保证样本多样性
+    if len(df) > 1000:
+        # 先用KMeans聚类，保证多样性
+        sample_features = df[[c for c in df.columns if 'car_position_' in c or 'car_speed_' in c]].values
+        n_clusters = min(100, len(df) // 10)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        cluster_labels = kmeans.fit_predict(sample_features)
+        sampled_indices = []
+        for cluster in range(n_clusters):
+            cluster_idx = np.where(cluster_labels == cluster)[0]
+            if len(cluster_idx) > 0:
+                # 每个簇随机采样一定数量
+                n = max(1, int(1000 / n_clusters))
+                chosen = np.random.choice(cluster_idx, size=min(n, len(cluster_idx)), replace=False)
+                sampled_indices.extend(chosen)
+        # 如果不足1000个，再随机补齐
+        if len(sampled_indices) < 1000:
+            remaining = list(set(range(len(df))) - set(sampled_indices))
+            extra = np.random.choice(remaining, size=1000 - len(sampled_indices), replace=False)
+            sampled_indices.extend(extra)
+        sampled_indices = np.array(sampled_indices[:1000])
+        df = df.iloc[sampled_indices].reset_index(drop=True)
+    else:
+        df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    #--------------------------------------------------------------------------------------------------------
+    # 添加intersection_pos列
     lane_pos_map = {5: 53.05, 6: 53.13, 7: 53.30}
     df['intersection_pos'] = df['lane'].map(lane_pos_map)
 
@@ -399,7 +427,7 @@ if __name__ == "__main__":
     main(args)
 
 #python modelsCollect4.py --batch_size 16 --layNum 4
-#python modelsCollect4.py --batch_size 64 --test_size 0.9 --epochs 100 --lr 0.005 --unit 256 --layNum 8 --dt 0.5
+#python modelsCollect4.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.005 --unit 256 --layNum 8 --dt 0.5
 
 
 

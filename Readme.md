@@ -57,9 +57,10 @@
     - 注：采用 pyGameInterface2，所有车辆参数一致。
 
 - **modelCollect4.py**
+    - 基于modelCollect3.py,加入dt可变。把样本聚类为1000类，每个类别提取1个样本
     - 针对每辆车独立参数的 IDM 跟车模型，探索可微分物理模型的局限性。
-    - 注：采用 pyGameInterface4beta，每辆车参数独立。
-    - 因为仿真物理模型无法可微，导致模型训练过程出现大问题，所以这个模型到此为止
+    - python modelsCollect4.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.005 --unit 256 --layNum 8 --dt 0.5
+    
 
 - **modelCollect3.py** 已经跑通
     > - 针对每辆车独立参数的 IDM 跟车模型，探索可微分物理模型的局限性。
@@ -78,6 +79,8 @@
     - jax可微的仿真模型，全部用initial_env_state_pure，rollout_while 纯函数和jax优化
     - 核心函数为 initial_env_state_pure，rollout_while，ompute_idm_acc，compute_stopping_acc，step_pure
     - 其他函数为中间过程和测试
+    - dt可以改变，但是结果dt=0.1和0.5，结果没有太大不同
+    - 用python modelCollect4.py
 
 - **pyGameBraxInterface4beta**
     - 不使用jax的特性，jnp就是np,方便调试和多进程仿真。
