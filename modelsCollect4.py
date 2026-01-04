@@ -71,13 +71,25 @@ def get_param_bounds(num_types):
     """根据类别数量生成参数边界"""
     # [v0, T, s0, a, b, rtime]
     base_bounds = [
+        (30/3.6, 65/3.6), # v0
+        (0.5, 3.0),       # T
+        (1.0, 3.0),       # s0
+        (1.0, 3.0),       # a
+        (1.0, 6.0),       # b
+        (0.01, 3.0)       # rtime
+    ]
+
+    '''
+        
+    base_bounds = [
         (40/3.6, 60/3.6), # v0
         (0.5, 2.0),       # T
         (1.0, 3.0),       # s0
         (1.0, 3.0),       # a
         (1.0, 6.0),       # b
-        (0.01, 1.0)       # rtime
+        (0.01, 2.0)       # rtime
     ]
+    '''
     return np.array([base_bounds for _ in range(num_types)], dtype=np.float32)
 
 # 2. Keras 模型定义 (优化)
