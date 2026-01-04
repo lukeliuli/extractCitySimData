@@ -189,9 +189,9 @@ def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
     
 
     prev_time_to_vanish = state.time_to_vanish
-    vanish_pos = state.red_light_pos+5 # 物理上通过红灯位置稍微后移一点，有问题，(state.step_count + 1) * dt+？
+    vanish_pos = state.red_light_pos+1
     passed_mask = (state.position < vanish_pos) & (new_pos[inv_idx] >= vanish_pos)
-    new_time_to_vanish = jnp.where((prev_time_to_vanish < 0) & passed_mask, (state.step_count + 1) * dt, prev_time_to_vanish) #注意这里乘以0.1了
+    new_time_to_vanish = jnp.where((prev_time_to_vanish < 0) & passed_mask, (state.step_count + 1) * dt-4, prev_time_to_vanish) #注意这里乘以0.1了
     
     new_state = EnvState(
         position=new_pos[inv_idx],

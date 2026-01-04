@@ -273,6 +273,7 @@ def main(args):
     # 添加intersection_pos列
     lane_pos_map = {5: 53.05, 6: 53.13, 7: 53.30}
     df['intersection_pos'] = df['lane'].map(lane_pos_map)
+    
 
     dt = args.dt
     logging.info(f"使用时间步长 dt={dt} 进行仿真")
@@ -443,14 +444,14 @@ def main(args):
             val_errors = np.concatenate([arr.flatten() for arr in all_val_errors])
             logging.info(f"Epoch {epoch+1} 验证完成 - 误差均值: {np.mean(val_errors):.4f}, RMSE: {np.sqrt(np.mean(np.square(val_errors))):.4f}")
 
-            model_path = f"model_epoch_{epoch+1}.h5"
+            model_path = f"./tmpModes/model_epoch_{epoch+1}.h5"
             model.save(model_path)
             # Save validation errors
-            np.save(f"validation_errors_epoch_{epoch+1}.npy", val_errors)
+            np.save(f"./tmpModes/validation_errors_epoch_{epoch+1}.npy", val_errors)
             logging.info(f"模型已保存至 {model_path}")
         else:
             # 非验证epoch也保存模型，但不进行验证
-            model_path = f"model_epoch_{epoch+1}.h5"
+            model_path = f"./tmpModes/model_epoch_{epoch+1}.h5"
             model.save(model_path)
             logging.info(f"模型已保存至 {model_path}")
 
