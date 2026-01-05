@@ -27,7 +27,6 @@ from tensorflow.keras.layers import Input, Dense, BatchNormalization, ReLU, Add
 from tensorflow.keras.optimizers import Adam
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
-
 import time
 import os
 import random
@@ -124,7 +123,44 @@ def build_simple_resnet(input_dim, output_dim, unit=256, layNum=8):
     model = Model(inputs=inp, outputs=out)
     return model
 
+def build_simple_resnet_regress(input_dim, output_dim, unit=256, layNum=8):
 
+
+    def resnet_block(x, units):
+        shortcut = x
+
+        # 第一个 Dense -> BN -> ReLU
+        y = Dense(units)(x)
+        y = BatchNormalization()(y)
+        y = ReLU()(y)
+
+        # 第二个 Dense -> BN
+        y = Dense(units)(y)
+        y = BatchNormalization()(y)
+
+        # 如果维度不匹配，使用1x1卷积调整shortcut
+        if shortcut.shape[-1] != units:
+            shortcut = Dense(units)(shortcut)
+
+        # Add & 最后的ReLU
+        y = Add()([shortcut, y])
+        y = ReLU()(y)
+        return y
+
+    inp = Input(shape=(input_dim,))
+    # 初始块: Dense -> BN -> ReLU
+    x = Dense(unit)(inp)
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+
+    for _ in range(layNum):
+        x = resnet_block(x, unit)
+
+
+ 
+    out = Dense(1, activation='linear', name='vanish_time')(x)  # 线性激活，输出时间值
+    model = Model(inputs=inp, outputs=out)
+    return model
             
 def genSamplesByRandomRemovingVehcile(df, remove_ratio=0.1):
     """
@@ -265,11 +301,11 @@ def genDatasetVanishTime(df,test_size,batch_size):
 
 
     # 创建 tf.data.Dataset
-    train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train, raw_train))
+    train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
     #train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
     train_dataset = train_dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
 
-    val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val, raw_val))
+    val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
     val_dataset = val_dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
 
     return X_train, X_val, y_train, y_val, raw_train, raw_val, train_dataset, val_dataset,raw_cols
@@ -435,8 +471,107 @@ def main(args):
     logging.info(f"丢失车辆数据准备完成: {len(X_train2)} 训练样本, {len(X_val2)} 验证样本")
     logging.info(f"合成车辆数据准备完成: {len(X_train3)} 训练样本, {len(X_val3)} 验证样本")
 
+    #-----------------------------------------------------------------------------
+    #-----------------------------------------------------------------------------
+    #-----------------------------------------------------------------------------
+    #用无lost的数据集训练x_Train1进行训练,预测vanishTime，然后用训练好的模型对有lost的x_val2进行预测vanishTime
+    # 准备原始数据集（无丢失车辆）用于训练回归模型预测消失时间
+    df1 = pd.read_csv(args.csv_path).dropna()
+    df1.rename(columns={'car_position': 'main_car_position'}, inplace=True)
+    df1.rename(columns={'car_speed': 'main_car_speed'}, inplace=True)
+    X_train1_vanish, X_val1_vanish, y_train1_vanish, y_val1_vanish, \
+        raw_train1_vanish, raw_val1_vanish, train_dataset1_vanish, val_dataset1_vanish, \
+        raw_cols1_vanish = genDatasetVanishTime(df1, args.test_size, args.batch_size)
+    
+    print(X_train1_vanish.shape)
+    
+    # 构建回归模型，用于预测消失时间
+    output_dim_vanish = 1  # 回归任务，预测消失时间
+    model_vanish_reg = build_simple_resnet_regress(X_train1_vanish.shape[1], output_dim_vanish, args.unit, args.layNum)
 
+    # 使用学习率调度器
+    initial_learning_rate = args.lr
+    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate,
+        decay_steps=100,  # 每100步衰减
+        decay_rate=0.99,  # 每次衰减到99%
+        staircase=True
+    )
+    optimizer = Adam(learning_rate=lr_schedule)
 
+    # 对于回归任务，使用均方误差损失函数
+    model_vanish_reg.compile(optimizer=optimizer, loss='mse', metrics=['mae'])
+
+    # 训练回归模型
+    model_vanish_reg.fit(train_dataset1_vanish, validation_data=val_dataset1_vanish, 
+                         epochs=args.epochs, verbose=1)
+
+    # 用训练好的模型对有丢失车辆的数据进行预测
+    predictions_on_lost = model_vanish_reg.predict(X_val2)
+    
+    # 将预测结果与真实值进行比较
+    true_vanish_times = y_val2  # 有丢失车辆数据集的真实消失时间
+    
+    # 计算评估指标
+    mae = np.mean(np.abs(predictions_on_lost.flatten() - true_vanish_times))
+    mse = np.mean((predictions_on_lost.flatten() - true_vanish_times) ** 2)
+    rmse = np.sqrt(mse)
+    
+    print(f"Regression model trained on normal data - MAE on lost-vehicle data: {mae:.4f}")
+    print(f"Regression model trained on normal data - MSE on lost-vehicle data: {mse:.4f}")
+    print(f"Regression model trained on normal data - RMSE on lost-vehicle data: {rmse:.4f}")
+    
+    # 绘制预测结果对比图
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(12, 5))
+    
+    # 预测值与真实值对比
+    plt.subplot(1, 2, 1)
+    plt.scatter(range(len(predictions_on_lost)), predictions_on_lost, label='Predicted Vanish Time', 
+                alpha=0.7, marker='o', color='blue')
+    plt.scatter(range(len(true_vanish_times)), true_vanish_times, label='True Vanish Time', 
+                alpha=0.7, marker='x', color='red')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Vanish Time')
+    plt.title('Predicted vs True Vanish Time (Normal Model on Lost-Vehicle Data)')
+    plt.legend()
+    
+    # 预测值与真实值的散点图（理想情况下应该在对角线上）
+    plt.subplot(1, 2, 2)
+    plt.scatter(true_vanish_times, predictions_on_lost, alpha=0.7)
+    # 绘制对角线
+    min_val = min(min(true_vanish_times), min(predictions_on_lost))
+    max_val = max(max(true_vanish_times), max(predictions_on_lost))
+    plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Perfect Prediction')
+    plt.xlabel('True Vanish Time')
+    plt.ylabel('Predicted Vanish Time')
+    plt.title('Scatter Plot: True vs Predicted')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig('normal_model_on_lost_vehicle_data.png')
+    plt.close()
+    
+    # 计算残差
+    residuals = predictions_on_lost.flatten() - true_vanish_times
+    plt.figure(figsize=(10, 6))
+    plt.scatter(range(len(residuals)), residuals, alpha=0.7)
+    plt.axhline(y=0, color='r', linestyle='--', label='Zero Error Line')
+    plt.xlabel('Sample Index')
+    plt.ylabel('Residuals (Predicted - True)')
+    plt.title('Residuals Analysis: Normal Model on Lost-Vehicle Data')
+    plt.legend()
+    plt.savefig('residuals_normal_model_on_lost_vehicle.png')
+    plt.close()
+    
+    # 统计残差的基本统计信息
+    print(f"Residuals Statistics:")
+    print(f"Mean Residual: {np.mean(residuals):.4f}")
+    print(f"Std of Residuals: {np.std(residuals):.4f}")
+    print(f"Min Residual: {np.min(residuals):.4f}")
+    print(f"Max Residual: {np.max(residuals):.4f}")
+
+    return
     ####################################################################################
     #-----------------------------------------------------------------------------
     #生成识别和回归双分支模型，预测同时识别和回归：车辆丢失概率和时间
@@ -568,7 +703,8 @@ def main(args):
     plt.close()
 
     return
-
+    #-----------------------------------------------------------------------------
+    #-----------------------------------------------------------------------------
     #-----------------------------------------------------------------------------
     #生成识别模型 - 二分类任务（是否丢失车辆），输出维度为1
     output_dim = 1  # 二分类任务，输出为1维，表示车辆丢失的概率
@@ -674,6 +810,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     main(args)
 
-#python modelsLostReg.py --batch_size 1280 --test_size 0.9 --epochs 100 --lr 0.005 --unit 256 --layNum 8 --dt 0.1
+#python modelsLostReg.py --batch_size 5120 --test_size 0.9 --epochs 500 --lr 0.005 --unit 256 --layNum 8 -
 
 

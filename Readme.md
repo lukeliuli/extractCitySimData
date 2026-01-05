@@ -56,10 +56,7 @@
         - `random_search`：随机搜索，待完善。
     - 注：采用 pyGameInterface2，所有车辆参数一致。
 
-- **modelCollect4.py**
-    - 基于modelCollect3.py,加入dt可变。把样本聚类为1000类，每个类别提取1个样本
-    - 针对每辆车独立参数的 IDM 跟车模型，探索可微分物理模型的局限性。
-    - python modelsCollect4.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.005 --unit 256 --layNum 8 --dt 0.5
+
     
 
 - **modelCollect3.py** 已经跑通
@@ -86,6 +83,31 @@
     - 不使用jax的特性，jnp就是np,方便调试和多进程仿真。
     - main函数用pool测试CPU并行和dt
 
+- **modelCollect4.py 当前主要测试函数** 
+    - 基于modelCollect3.py,加入dt可变。把样本聚类为1000类，每个类别提取1个样本
+    - 针对每辆车独立参数的 IDM 跟车模型，探索可微分物理模型的局限性。
+    - python modelsCollect4.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.005 --unit 256 --layNum 8 --dt 0.5
+
+- **modelLost.py 当前主要测试函数** 
+    > - 实现车辆漏检的数据集生成，以及基于模型进行识别
+    > - 代码分为四部分
+        > - 第一部分：数据集生成：
+            > - genSamplesByRandomRemovingVehcile：随机删除车辆，生成df数据集
+            > - genDatasetVanishTime：输入为df,生成用于训练vanishTime回归模型训练和验证数据集
+            > - genDatasetLost：输入为df,生成用于训练lostFlag二分法识别模型训练和验证数据集
+            > - genDatasetLostFlagVanishTime：输入为df,生成用于识别和回归双分支模型训练和验证数据集
+        > - 第二部分：模型生成和训练模型：
+            > - build_multi_task_resnet：基于keras生成识别和回归双分支模型
+            > - build_simple_resnet_regress: 基于keras生成回归模型
+            > - build_simple_resnet: 基于keras生成识别模型
+        > - 第三部分：main运行测试代码（用return和长#隔离决定运行那些代码）
+            > - (1)各类数据集生成代码
+            > - (2) 回归模型训练和测试代码：
+                > - 注意这里用无lost模型训练，测试用有lost模型验证，
+                > - 效果差证明必须考虑车辆识别缺失情况，必须做专用处理和识别
+            > - (3) 双分支（回归和识别整合）模型训练和测试代码
+            > - (4) 纯识别模型训练和测试代码
+        > python modelsLostReg.py --batch_size 1280 --test_size 0.5 --epochs 500 --lr 0.005 --unit 256 --layNum 8
 
 ## 数据说明
 
