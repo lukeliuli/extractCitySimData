@@ -88,7 +88,7 @@
     - 针对每辆车独立参数的 IDM 跟车模型，探索可微分物理模型的局限性。
     - python modelsCollect4.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.005 --unit 256 --layNum 8 --dt 0.5
 
-- **modelLost.py 当前主要测试函数** 
+- **modelRegLost.py 当前主要测试函数** 
     > - 实现车辆漏检的数据集生成，以及基于模型进行识别
     > - 代码分为四部分
         > - 第一部分：数据集生成：

@@ -1,8 +1,15 @@
 '''
 
 参考modelsCollect3.py,做如下改进:
-1.dt=0.5,提高速度
-2.查查bug
+1.modelsCollect4.py: 引入了命令行参数 --dt，默认值为0.5，以提高仿真速度
+2.modelsCollect4.py: 添加了K-means聚类采样功能，通过--nC参数控制样本数量，保证样本多样性
+3.modelsCollect4.py: 添加了梯度裁剪（gradient clipping），防止梯度爆炸
+4.modelsCollect4.py: 每20个epoch进行一次验证，或者在最后一个epoch验证，减少验证频率
+5.modelsCollect4.py: 模型保存在./tmpModes/子目录中
+6.modelsCollect4.py: v0范围为(30/3.6, 65/3.6)，rtime范围为(0.01, 3.0)，扩大了参数范围
+7.modelsCollect4.py: 使用指数衰减学习率调度器，开始时学习率较高，然后逐渐降低
+8.在run_batch_simulation2函数中对-1车辆位置进行了特殊处理，给缺失车辆一个随机的较远距离，确保它们在排序中靠后
+
 '''
 
 import os
@@ -485,5 +492,7 @@ if __name__ == "__main__":
 
 
 '''
-wget', 'https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+modelCollect4.py与Collect3的区别:
+1. dt=0.5,提高速度
+2.修复bug   
 '''

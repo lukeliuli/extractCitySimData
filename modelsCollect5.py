@@ -1,13 +1,9 @@
 '''
 
 参考modelsCollect4.py,做如下改进:
-1.数据增强：将随机去掉一个车辆位置和速度数据，模拟传感器丢失数据的情况，增强模型鲁棒性。
-2.物理模型改进：如果出现车辆丢失，就加入虚拟车，进行仿真。以及车辆丢失识别方法
-3.识别模型改进：ResNet模型中，加入车辆丢失识别
+1. 增加要拟合的物理参数数量，增加模型复杂度
+
 '''
-
-
-
 
 import os
 import sys
@@ -75,13 +71,25 @@ def get_param_bounds(num_types):
     """根据类别数量生成参数边界"""
     # [v0, T, s0, a, b, rtime]
     base_bounds = [
+        (30/3.6, 65/3.6), # v0
+        (0.5, 3.0),       # T
+        (1.0, 3.0),       # s0
+        (1.0, 3.0),       # a
+        (1.0, 6.0),       # b
+        (0.01, 3.0)       # rtime
+    ]
+
+    '''
+        
+    base_bounds = [
         (40/3.6, 60/3.6), # v0
         (0.5, 2.0),       # T
         (1.0, 3.0),       # s0
         (1.0, 3.0),       # a
         (1.0, 6.0),       # b
-        (0.01, 1.0)       # rtime
+        (0.01, 2.0)       # rtime
     ]
+    '''
     return np.array([base_bounds for _ in range(num_types)], dtype=np.float32)
 
 # 2. Keras 模型定义 (优化)
@@ -223,151 +231,7 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
     tf.print(f"JAX SIM Batch simulation time (s): {end_time - start_time:.2f}")
     return tf.convert_to_tensor(results, dtype=tf.float32)
             
-def genSamplesByRandomRemovingVehcile(csvPath, remove_ratio=0.1):
-    """
-    根据上下文，读入csv文件，获得当前样本的下排队车辆有那些以及相应的位置和序号
-    给出当前目标车对于的排队车辆的序号i
-    同时实现数据增强：随机去掉一些车辆位置和速度数据，模拟传感器丢失数据的情况
-    """
-    df = pd.read_csv(csvPath).dropna()
-    df.rename(columns={'car_position': 'main_car_position'}, inplace=True)
-    df.rename(columns={'car_speed': 'main_car_speed'}, inplace=True)
-
-    # 获取所有车辆位置列和速度列
-    car_pos_cols = [col for col in df.columns if col.startswith('car_position_')]
-    car_speed_cols = [col for col in df.columns if col.startswith('car_speed_')]
-
-    # 按照位置排序，确定排队车辆的顺序
-    results = []
-
-    for idx, row in df.iterrows():
-        # 获取当前样本的所有车辆位置
-        positions = []
-        for pos_col in car_pos_cols:
-            pos_val = row[pos_col]
-            if pos_val != -1 and not pd.isna(pos_val):  # 有效位置值
-                # 提取车辆索引（从列名中获取）
-                car_posi = int(pos_col.replace('car_position_', ''))
-                positions.append((pos_val,car_posi))
-
-        # 按位置排序（距离交叉口近的在前）
-        positions.sort(key=lambda x: x[0])
-
-        # 获取主车位置（目标车）
-        main_car_pos = row['main_car_position'] if 'main_car_position' in row else row['car_position']
-
-        # 找到主车在排队中的索引
-        main_car_posque_idx = -1
-        main_car_posi = -1
-        for queue_idx, (pos, car_posi) in enumerate(positions):
-            if abs(pos - main_car_pos) < 1e-3:  # 使用小的容差值比较浮点数
-                mmain_car_posque_idx = queue_idx
-                main_car_posi = car_posi
-                break
-      
-        # 实现数据增强：随机移除一些车辆数据
-        if remove_ratio > 0:
-            # 计算要移除的车辆数量
-            num_vehicles = len(positions)
-
-            if num_vehicles <=2:
-                break
-           
-            num_to_remove = max(1, int(num_vehicles * remove_ratio))  # 至少移除1辆车
-
-            # 随机选择要移除的车辆（但不能移除主车）
-            available_indices = [i for i in range(len(positions)) if i != main_car_posque_idx]
-            if len(available_indices) >= num_to_remove:
-                indices_to_remove = random.sample(available_indices, num_to_remove)
-
-                # 按降序排序以避免索引变化问题
-                indices_to_remove.sort(reverse=True)
-
-                # 移除选中的车辆
-                for idx_to_remove in indices_to_remove:
-                    if idx_to_remove < len(positions):
-                        positions.pop(idx_to_remove)
-
-                # 重新计算主车在新队列中的索引
-                main_car_pos = row['main_car_position'] if 'main_car_position' in row else row['car_position']
-                main_car_posque_idx  = -1
-                for queue_idx, (pos, car_posi) in enumerate(positions):
-                    if abs(pos - main_car_pos) < 1e-3:
-                        main_car_posque_idx = queue_idx
-                        main_car_posi = car_posi
-                        break
-                #print("After removal, main_car_posque_idx:", main_car_posque_idx)  
-                
-                # 2. indices_to_remove包含被移除车辆在原始positions中的索引,根据indices_to_remove，修改df的当前row,删除对应车辆的位置和速度数据
-                for idx_to_remove in indices_to_remove:
-                    if idx_to_remove < len(car_pos_cols):
-                        car_pos_col = car_pos_cols[idx_to_remove]
-                        car_speed_col = car_speed_cols[idx_to_remove]
-                        row[car_pos_col] = -1
-                        row[car_speed_col] = -1
-                #更新df的当前row
-                df.iloc[idx] = row
-
-
-
-        # 构建排队车辆信息
-        queued_vehicles = {
-            'sample_idx': idx,
-            'main_car_position': main_car_pos,
-            'main_car_queue_idx': main_car_posque_idx,
-            'main_car_name_pos_i':  main_car_posi ,
-            'queued_vehicles': positions,  # [(position, original_index), ...]
-            'num_queued_vehicles': len(positions),
-            'removed_vehicles_count': len([col for col in car_pos_cols if row[col] != -1 and not pd.isna(row[col])]) - len(positions)
-        }
-
-        results.append(queued_vehicles)
-        
-    return df,results
-
- def genDataset(df):
-
-        # 添加intersection_pos列
-        lane_pos_map = {5: 53.05, 6: 53.13, 7: 53.30}
-        df['intersection_pos'] = df['lane'].map(lane_pos_map)
-
-       
     
-        # --- 修改开始 ---
-        # 明确区分特征列和传递给仿真的原始数据列
-        feature_cols = [c for c in df.columns if ('car_position_' in c or 'car_speed_' in c or 'redLight' in c)]
-        
-        # 为仿真准备的列，确保没有重复
-        # 我们需要所有特征列，以及一些额外的信息
-        raw_cols_set = set(feature_cols)
-        raw_cols_set.add('lane')
-        raw_cols_set.add('intersection_pos')
-        # 将主车位置重命名以避免冲突
-        
-        raw_cols_set.add('main_car_position')
-        
-        raw_cols = sorted(list(raw_cols_set)) # 排序以保证列顺序一致
-
-        X = df[feature_cols].values.astype(np.float32)
-        y = (df['time_to_vanish'].values / 30.0).astype(np.float32)#注意已经除以30了
-        raw_data_for_sim = df[raw_cols].values.astype(np.float32)
-        # --- 修改结束 ---
-
-        X_train, X_val, y_train, y_val, raw_train, raw_val = train_test_split(
-            X, y, raw_data_for_sim, test_size=args.test_size, random_state=42
-        )
-
-
-        # 创建 tf.data.Dataset
-        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train, raw_train))
-        #train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
-        train_dataset = train_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
-
-        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val, raw_val))
-        val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
-
-        return X_train, X_val, y_train, y_val, raw_train, raw_val, train_dataset, val_dataset,raw_cols
-   
 
 # -------------------------- 三种方案耗时测试函数 --------------------------
 # 4. 主训练函数
@@ -376,12 +240,8 @@ def main(args):
     logging.info(f"启动训练，参数: {args}")
 
     logging.info(f"从 {args.csv_path} 加载数据...")
-    df1 = pd.read_csv(args.csv_path).dropna()
-    df.rename(columns={'car_position': 'main_car_position'}, inplace=True)
-
-    df_missveh,queued_info = genSamplesByRandomRemovingVehcile(args.csv_path, remove_ratio=0.1)
-
-   
+    df = pd.read_csv(args.csv_path).dropna()
+    
     #--------------------------------------------------------------------------------------------------------
     # 随机提取args.nC个样本，尽可能保证样本多样性
     numSamples = args.nC
@@ -408,40 +268,54 @@ def main(args):
         df = df.iloc[sampled_indices].reset_index(drop=True)
     else:
         df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    #--------------------------------------------------------------------------------------------------------
+    # 添加intersection_pos列
+    lane_pos_map = {5: 53.05, 6: 53.13, 7: 53.30}
+    df['intersection_pos'] = df['lane'].map(lane_pos_map)
     
+
     dt = args.dt
     logging.info(f"使用时间步长 dt={dt} 进行仿真")
+  
+    # --- 修改开始 ---
+    # 明确区分特征列和传递给仿真的原始数据列
+    feature_cols = [c for c in df.columns if ('car_position_' in c or 'car_speed_' in c or 'redLight' in c)]
     
-    #--------------------------------------------------------------------------------------------------------
-    # 数据准备函数
-   
-    X_train, X_val, y_train, y_val, raw_train, raw_val, train_dataset, val_dataset,raw_cols = genDataset(df)
+    # 为仿真准备的列，确保没有重复
+    # 我们需要所有特征列，以及一些额外的信息
+    raw_cols_set = set(feature_cols)
+    raw_cols_set.add('lane')
+    raw_cols_set.add('intersection_pos')
+    # 将主车位置重命名以避免冲突
+    df.rename(columns={'car_position': 'main_car_position'}, inplace=True)
+    raw_cols_set.add('main_car_position')
+    
+    raw_cols = sorted(list(raw_cols_set)) # 排序以保证列顺序一致
+
+    X = df[feature_cols].values.astype(np.float32)
+    y = (df['time_to_vanish'].values / 30.0).astype(np.float32)#注意已经除以30了
+    raw_data_for_sim = df[raw_cols].values.astype(np.float32)
+    # --- 修改结束 ---
+
+    X_train, X_val, y_train, y_val, raw_train, raw_val = train_test_split(
+        X, y, raw_data_for_sim, test_size=args.test_size, random_state=42
+    )
+
+
+    # 创建 tf.data.Dataset
+    train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train, raw_train))
+    #train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+    train_dataset = train_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+
+    val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val, raw_val))
+    val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+
     logging.info(f"数据准备完成: {len(X_train)} 训练样本, {len(X_val)} 验证样本")
-    
-    if args.validate_lost_vehicle:
-        X_train2, X_val2, y_train2, y_val2, raw_train2, raw_val2, train_dataset2, val_dataset2, raw_cols2 = genDataset(df_missveh)
-        X_val = X_val2
-        y_val = y_val2
-        raw_val = raw_val2
-        val_dataset = val_dataset2
-        logging.info(f"丢失车辆数据准备完成: {len(X_train)} 训练样本, {len(X_val)} 验证样本")
-    
- 
-    #-----------------------------------------------------------------------------
-    #数据库df,计算目标车的前面车辆的低速和静止状态下车辆与前车的距离以及头车与停止线的距离，并用car_position_i进行标记
-    #基于softmax计算lost vehicle的概率
-    #最终预测结果
-    # 1.在ResNet的基础上，增加一个分支用于预测lost vehicle的概率
-    # 2.或者
 
-
-    #-----------------------------------------------------------------------------
-    #生成参数回归模型
     num_types = args.num_types
     output_dim = num_types * 6
     model = build_simple_resnet(X_train.shape[1], output_dim, args.unit, args.layNum)
-
-
 
     # 使用学习率调度器，开始时学习率较高，然后逐渐降低
     initial_learning_rate = args.lr
@@ -458,8 +332,6 @@ def main(args):
     #raw_columns_list = tf.constant(raw_cols) # 将列名作为常量传递
     raw_columns_list = raw_cols
     logging.info(f"模型创建完成: {num_types} 个车辆类别, ResNet输出维度 {output_dim}")
-
-
 
     @tf.function
     def train_step(x_batch, y_batch, raw_batch):
@@ -526,9 +398,6 @@ def main(args):
         errors = predicted_times - y_batch
 
         return errors
-    
-
-
 
     for epoch in range(args.epochs):
         logging.info(f"===== Epoch {epoch + 1}/{args.epochs} =====")
@@ -575,14 +444,14 @@ def main(args):
             val_errors = np.concatenate([arr.flatten() for arr in all_val_errors])
             logging.info(f"Epoch {epoch+1} 验证完成 - 误差均值: {np.mean(val_errors):.4f}, RMSE: {np.sqrt(np.mean(np.square(val_errors))):.4f}")
 
-            model_path = f"model_epoch_{epoch+1}.h5"
+            model_path = f"./tmpModes/model_epoch_{epoch+1}.h5"
             model.save(model_path)
             # Save validation errors
-            np.save(f"validation_errors_epoch_{epoch+1}.npy", val_errors)
+            np.save(f"./tmpModes/validation_errors_epoch_{epoch+1}.npy", val_errors)
             logging.info(f"模型已保存至 {model_path}")
         else:
             # 非验证epoch也保存模型，但不进行验证
-            model_path = f"model_epoch_{epoch+1}.h5"
+            model_path = f"./tmpModes/model_epoch_{epoch+1}.h5"
             model.save(model_path)
             logging.info(f"模型已保存至 {model_path}")
 
@@ -615,6 +484,3 @@ if __name__ == "__main__":
 
 
 
-'''
-wget', 'https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
-'''
