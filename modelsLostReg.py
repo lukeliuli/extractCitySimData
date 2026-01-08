@@ -474,7 +474,7 @@ def main(args):
     #-----------------------------------------------------------------------------
     #-----------------------------------------------------------------------------
     #-----------------------------------------------------------------------------
-    #用无lost的数据集训练x_Train1进行训练,预测vanishTime，然后用训练好的模型对有lost的x_val2进行预测vanishTime
+    print("实验1：用无lost的数据集训练x_Train1进行训练,预测vanishTime，然后用训练好的模型对有lost的x_val2进行预测vanishTime")
     # 准备原始数据集（无丢失车辆）用于训练回归模型预测消失时间
     df1 = pd.read_csv(args.csv_path).dropna()
     df1.rename(columns={'car_position': 'main_car_position'}, inplace=True)
@@ -571,11 +571,12 @@ def main(args):
     print(f"Min Residual: {np.min(residuals):.4f}")
     print(f"Max Residual: {np.max(residuals):.4f}")
 
-    return
+    
     ####################################################################################
     #-----------------------------------------------------------------------------
     #生成识别和回归双分支模型，预测同时识别和回归：车辆丢失概率和时间
      #----------------------------------------------------
+    print("实验2：生成识别和回归双分支模型，预测同时识别和回归：车辆丢失概率和时间")
     X_train4, X_val4, y_lost_train4, y_lost_val4, y_vanish_train4, y_vanish_val4,\
         raw_train4, raw_val4, \
             train_dataset4, val_dataset4, raw_cols4 = genDatasetLostFlagVanishTime(df3, args.test_size, args.batch_size)
@@ -702,11 +703,12 @@ def main(args):
     plt.savefig('modereg4_predictions_and_true_values.png')
     plt.close()
 
-    return
+    
     #-----------------------------------------------------------------------------
     #-----------------------------------------------------------------------------
     #-----------------------------------------------------------------------------
     #生成识别模型 - 二分类任务（是否丢失车辆），输出维度为1
+    print("实验3：生成识别模型 - 二分类任务（是否丢失车辆），输出维度为1")
     output_dim = 1  # 二分类任务，输出为1维，表示车辆丢失的概率
     modelReg3 = build_simple_resnet(X_train3.shape[1], output_dim, args.unit, args.layNum)
 
@@ -810,6 +812,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     main(args)
 
-#python modelsLostReg.py --batch_size 5120 --test_size 0.9 --epochs 500 --lr 0.005 --unit 256 --layNum 8 -
+#python modelsLostReg.py --batch_size 5120 --test_size 0.9 --epochs 500 --lr 0.005 --unit 256 --layNum 8
 
 
