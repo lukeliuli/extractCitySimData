@@ -2,6 +2,12 @@
 
 参考modelsCollect4.py,做如下改进:
 1. 增加要拟合的物理参数数量，增加模型复杂度
+    red_light_time_offset: float
+    redlightpos2vanishpos_offset: float
+    vehpos_offset: float
+    vehspeed_offset: float
+    vanish_time_offset: float
+    dist_gap_offset: float
 
 '''
 
@@ -22,7 +28,7 @@ from jax import tree_util
 import time
 import os
 import random
-from pyGameBraxInterface4gamma import IDMParams, EnvState,initial_env_state_pure, rollout_pure,rollout_while
+from pyGameBraxInterface4delta import IDMParams, EnvState,initial_env_state_pure, rollout_pure,rollout_while
 from sklearn.cluster import KMeans
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -77,6 +83,7 @@ def get_param_bounds(num_types):
         (1.0, 3.0),       # a
         (1.0, 6.0),       # b
         (0.01, 3.0)       # rtime
+     
     ]
 
     '''
@@ -148,18 +155,40 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
     batch_size = nn_output_batch.shape[0]
     results = []
     statesAll = []
-
+    
     for i in range(batch_size):
         nn_output = nn_output_batch[i].numpy()
         raw_data = raw_data_batch[i].numpy()
     
-        # 1. 参数解码
-        scaled_params = jnp.asarray(nn_output).reshape((num_types, 6))
+        # 1. 参数解码numType =4+1;4为4类IDM参数，1为全局偏移量
+        scaled_params = jnp.asarray(nn_output).reshape((num_types+1, 6))
+        scaled_params = scaled_params[:-1, :]  # 去掉最后一行全局偏移量
         param_bounds = jnp.asarray(param_bounds)
         low = param_bounds[:, :, 0]
         high = param_bounds[:, :, 1]
         real_params = low + scaled_params * (high - low)
-        # 插入常量delta=4.0, length=5.0
+
+        scence_offset = scaled_params[-1, :]  # 最后一行全局场景偏移量
+        redlighttime_offset,\
+        redlightpos2vanishpos_offset,\
+        vehpos_offset,\
+        redlightpos_offset,\
+        vanishtime_offset,\
+        distgap_offset = scence_offset
+
+        redlighttime_offset = -4.0+redlighttime_offset*8.0 
+        redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*5.0
+        vehpos_offset = -4.0+vehpos_offset*8.0
+        redlightpos_offset = -4.0+ redlightpos_offset*8.0
+        vanishtime_offset = -4.0+vanishtime_offset*8.0
+        distgap_offset = -2.0+distgap_offset*4.0
+        scence_offset = redlighttime_offset,\
+                            redlightpos2vanishpos_offset,\
+                            vehpos_offset,\
+                            redlightpos_offset,\
+                            vanishtime_offset,\
+                            distgap_offset
+        
         def insert_constants(params):
             return jnp.concatenate([params[:5], jnp.array([4.0, 5.0]), params[5:]])
         idm_params_arr = jnp.stack([insert_constants(real_params[i]) for i in range(num_types)])
@@ -204,7 +233,8 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         red_light_duration = float(row_dict['redLightRemainingTime']) / 30.0#注意这里除以30了
         # 环境初始化
    
-        state = initial_env_state_pure(num_vehicles=num_cars, dt=dt, init_pos=init_pos, init_vel=init_speed, params=params, red_light_pos=red_light_pos, red_light_duration=red_light_duration)
+        state = initial_env_state_pure(num_vehicles=num_cars, dt=dt, init_pos=init_pos, init_vel=init_speed, params=params, \
+                                        red_light_pos=red_light_pos, red_light_duration=red_light_duration, scence_offset=scence_offset)
         statesAll.append((state, main_car_rank, num_cars))
 
     statesAll = tree_util.tree_map(lambda *xs: jnp.stack(xs), *statesAll)
@@ -314,7 +344,8 @@ def main(args):
     logging.info(f"数据准备完成: {len(X_train)} 训练样本, {len(X_val)} 验证样本")
 
     num_types = args.num_types
-    output_dim = num_types * 6
+    num_types2 = num_types+1;#增加6个参数，作为全局偏移量
+    output_dim = num_types2 * 6
     model = build_simple_resnet(X_train.shape[1], output_dim, args.unit, args.layNum)
 
     # 使用学习率调度器，开始时学习率较高，然后逐渐降低
@@ -339,7 +370,7 @@ def main(args):
         with tf.GradientTape() as tape:
             # ResNet forward pass
             nn_output = model(x_batch, training=True)
-            
+            #tf.print(f"nn_output:\n {nn_output}")
             # JAX simulation as a black-box function
             predicted_times = tf.py_function(
                 func=lambda nn_out, raw: run_batch_simulation2(
@@ -476,8 +507,7 @@ if __name__ == "__main__":
     main(args)
 
 #python modelsCollect4.py --batch_size 16 --layNum 4
-#python modelsCollect4.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.005 --unit 256 --layNum 8 --dt 0.5
-
+#python modelsCollect5.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.0005 --unit 256 --layNum 16 --dt 0.1 --nC 100
 
 
 

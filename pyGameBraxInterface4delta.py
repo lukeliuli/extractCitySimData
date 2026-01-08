@@ -56,6 +56,12 @@ class EnvState:
     free_acc: jnp.ndarray     # IDM自由流加速度
     interaction_acc: jnp.ndarray # IDM交互项加速度
     dt: float                  # 时间步长
+    redlighttime_offset: float
+    redlightpos2vanishpos_offset: float
+    vehpos_offset: float
+    redlightpos_offset: float
+    vanishtime_offset: float
+    distgap_offset: float
 
 
 
@@ -149,7 +155,7 @@ def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
 
     pos_front = jnp.concatenate([jnp.array([1e9]), pos[0:-1]])
     vel_front = jnp.concatenate([jnp.array([0.0]), vel[0:-1]])
-    gaps = pos_front - pos - p_sorted.length
+    gaps = pos_front - pos - p_sorted.length+state.distgap_offset
 
     acc_idm, free_acc, interaction_acc = compute_idm_acc(
         vel, vel_front, gaps, p_sorted,
@@ -192,11 +198,11 @@ def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
     
 
     prev_time_to_vanish = state.time_to_vanish
-    vanish_pos = state.red_light_pos+1
+    vanish_pos = state.red_light_pos+state.redlightpos2vanishpos_offset
     passed_mask = (state.position < vanish_pos) & (new_pos[inv_idx] >= vanish_pos)
 
     #注意这里乘以0.1了,以及这里的-4，人工调整，无理由，以后要改！！！
-    new_time_to_vanish = jnp.where((prev_time_to_vanish < 0) & passed_mask, (state.step_count + 1) * dt-4, prev_time_to_vanish) 
+    new_time_to_vanish = jnp.where((prev_time_to_vanish < 0) & passed_mask, (state.step_count + 1) * dt+state.vanishtime_offset, prev_time_to_vanish) 
     
     new_state = EnvState(
         position=new_pos[inv_idx],
@@ -221,8 +227,15 @@ def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
         dist_gap=gaps[inv_idx],
         free_acc=free_acc[inv_idx],
         interaction_acc=interaction_acc[inv_idx],
-        dt=state.dt
-    )
+        dt=state.dt,
+        redlighttime_offset=state.redlighttime_offset,
+        redlightpos2vanishpos_offset=state.redlightpos2vanishpos_offset,
+        vehpos_offset=state.vehpos_offset,
+        redlightpos_offset=state.redlightpos_offset,
+        vanishtime_offset=state.vanishtime_offset,
+        distgap_offset=state.distgap_offset)  
+
+    
 
     # 在 step_pure 末尾，返回 new_state 前：
     # 强制统一 dtype 为 float32，避免 JAX 认为结构不同
@@ -255,6 +268,13 @@ def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
         free_acc=new_state.free_acc.astype(jnp.float32),
         interaction_acc=new_state.interaction_acc.astype(jnp.float32),
         dt=new_state.dt.astype(jnp.float32),
+        redlighttime_offset = jnp.float32(state.redlighttime_offset),
+        redlightpos2vanishpos_offset=jnp.float32(state.redlightpos2vanishpos_offset),
+        vehpos_offset=jnp.float32(state.vehpos_offset),
+        redlightpos_offset=jnp.float32(state.redlightpos_offset),
+        vanishtime_offset=jnp.float32(state.vanishtime_offset),
+        distgap_offset=jnp.float32(state.distgap_offset)  
+    
     )
 
     return new_state
@@ -316,10 +336,18 @@ def rollout_pure(state: EnvState, num_vehicles: int, dt: float, max_steps: int =
     return traj
 
 def initial_env_state_pure(num_vehicles: int, dt: float, init_pos: jnp.ndarray, init_vel: jnp.ndarray, params: IDMParams,\
-                            red_light_pos: float, red_light_duration: float) -> EnvState:
+                            red_light_pos: float, red_light_duration: float,scence_offset:jnp.ndarray) -> EnvState:
     target_pos = jnp.ones(num_vehicles, dtype=jnp.float32) * 300.0
+
+    redlighttime_offset,\
+    redlightpos2vanishpos_offset,\
+    vehpos_offset,\
+    redlightpos_offset,\
+    vanishtime_offset,\
+    distgap_offset = scence_offset
+
     return EnvState(
-        position=jnp.asarray(init_pos, dtype=jnp.float32),
+        position=jnp.asarray(init_pos, dtype=jnp.float32)+vehpos_offset,
         velocity=jnp.asarray(init_vel, dtype=jnp.float32),
         acceleration=jnp.zeros(num_vehicles, dtype=jnp.float32),
         target_pos=target_pos,
@@ -336,9 +364,9 @@ def initial_env_state_pure(num_vehicles: int, dt: float, init_pos: jnp.ndarray, 
         step_count=0,
         collision=jnp.zeros(num_vehicles, dtype=jnp.float32),  # 注意：collision 应该是 bool？但你用 float，保持一致
         front_car_id=jnp.full((num_vehicles,), -1, dtype=jnp.int32),
-        red_light_pos=jnp.float32(red_light_pos),  # scalar float is OK
+        red_light_pos=jnp.float32(red_light_pos)+redlightpos_offset,  # scalar float is OK
         red_light_state=True,
-        red_light_remaining=jnp.float32(red_light_duration),
+        red_light_remaining=jnp.float32(red_light_duration)+redlighttime_offset,
         time_to_vanish=jnp.full((num_vehicles,), -1.0, dtype=jnp.float32),
         acc_stop=jnp.zeros(num_vehicles, dtype=jnp.float32),
         final_acc=jnp.zeros(num_vehicles, dtype=jnp.float32),
@@ -347,6 +375,13 @@ def initial_env_state_pure(num_vehicles: int, dt: float, init_pos: jnp.ndarray, 
         free_acc=jnp.full((num_vehicles,), -1.0, dtype=jnp.float32),
         interaction_acc=jnp.full((num_vehicles,), -1.0, dtype=jnp.float32),
         dt=jnp.float32(dt),
+        redlighttime_offset=jnp.float32(redlighttime_offset),
+        redlightpos2vanishpos_offset=jnp.float32(redlightpos2vanishpos_offset),
+        vehpos_offset=jnp.float32(vehpos_offset),
+        redlightpos_offset=jnp.float32(redlightpos_offset),
+        vanishtime_offset=jnp.float32(vanishtime_offset),
+        distgap_offset=jnp.float32(distgap_offset)  
+
     )
 
 
