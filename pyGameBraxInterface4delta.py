@@ -202,7 +202,7 @@ def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
     passed_mask = (state.position < vanish_pos) & (new_pos[inv_idx] >= vanish_pos)
 
     #注意这里乘以0.1了,以及这里的-4，人工调整，无理由，以后要改！！！
-    new_time_to_vanish = jnp.where((prev_time_to_vanish < 0) & passed_mask, (state.step_count + 1) * dt+state.vanishtime_offset, prev_time_to_vanish) 
+    new_time_to_vanish = jnp.where((prev_time_to_vanish < 0) & passed_mask, (state.step_count + 1) * dt, prev_time_to_vanish) 
     
     new_state = EnvState(
         position=new_pos[inv_idx],

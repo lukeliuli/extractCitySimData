@@ -176,12 +176,12 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         vanishtime_offset,\
         distgap_offset = scence_offset
 
-        redlighttime_offset = -4.0+redlighttime_offset*8.0 
-        redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*5.0
-        vehpos_offset = -4.0+vehpos_offset*8.0
-        redlightpos_offset = -4.0+ redlightpos_offset*8.0
-        vanishtime_offset = -4.0+vanishtime_offset*8.0
-        distgap_offset = -2.0+distgap_offset*4.0
+        redlighttime_offset = redlighttime_offset*4.0
+        redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*10.0
+        vehpos_offset = (-4.0+vehpos_offset*8.0)*0.1
+        redlightpos_offset = redlightpos_offset*10
+        vanishtime_offset = vanishtime_offset*10.0
+        distgap_offset = (-2.0+distgap_offset*4.0)*0.1
         scence_offset = redlighttime_offset,\
                             redlightpos2vanishpos_offset,\
                             vehpos_offset,\
@@ -251,7 +251,7 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         # 替换原来的 rollout_pure 调用
         state, main_car_rank, num_cars = states
         final_state = rollout_while(state, num_vehicles=num_cars, dt=dt,  max_steps=int(120/dt))
-        main_car_vanish_time = final_state.time_to_vanish[main_car_rank]
+        main_car_vanish_time = final_state.time_to_vanish[main_car_rank]+final_state.vanishtime_offset
         #tf.print("final_state.step_count:", final_state.step_count)
         return main_car_vanish_time#time_to_vanish计算时已经是秒了(step*0.1)
 
@@ -452,8 +452,8 @@ def main(args):
 
         logging.info(f"Epoch {epoch+1} 训练完成, 平均损失: {epoch_loss_avg.result().numpy():.4f}")
 
-        # 每20个epoch进行一次验证
-        if epoch % 20 == 0 or epoch == args.epochs - 1:  # 在第0, 20, 40,...个epoch以及最后一个epoch验证
+        # 每5个epoch进行一次验证
+        if epoch % 5 == 0 or epoch == args.epochs - 1:  # 在第0, 20, 40,...个epoch以及最后一个epoch验证
             val_loss_avg = tf.keras.metrics.Mean()
             total_val_batches = tf.data.experimental.cardinality(val_dataset).numpy()
             val_batch_idx = 0
@@ -469,12 +469,12 @@ def main(args):
                 val_loss = np.mean(np.square(errors_np))
                 val_loss_avg.update_state(val_loss)
                 remaining_val_batches = total_val_batches - val_batch_idx
-                logging.info(f"Val Batch {val_batch_idx}/{total_val_batches}, Loss: {val_loss:.4f}, \
+                logging.info(f"{'_'*100}\nVal Batch {val_batch_idx}/{total_val_batches}, Loss: {val_loss:.4f}, \
                              Time: {val_batch_end_time - val_batch_start_time:.3f}s, Remaining: {remaining_val_batches}")
 
             val_errors = np.concatenate([arr.flatten() for arr in all_val_errors])
             logging.info(f"Epoch {epoch+1} 验证完成 - 误差均值: {np.mean(val_errors):.4f}, RMSE: {np.sqrt(np.mean(np.square(val_errors))):.4f}")
-
+            logging.info(f"{'_'*100}")
             model_path = f"./tmpModes/model_epoch_{epoch+1}.h5"
             model.save(model_path)
             # Save validation errors
