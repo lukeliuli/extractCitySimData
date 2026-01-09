@@ -20,7 +20,8 @@ import pandas as pd
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Dense, BatchNormalization, ReLU, Add
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.optimizers import Adam,Adadelta,SGD,Adamax, RMSprop
+from tensorflow.keras.callbacks import ReduceLROnPlateau
 from sklearn.model_selection import train_test_split
 import jax
 import jax.numpy as jnp
@@ -161,14 +162,14 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         raw_data = raw_data_batch[i].numpy()
     
         # 1. 参数解码numType =4+1;4为4类IDM参数，1为全局偏移量
-        scaled_params = jnp.asarray(nn_output).reshape((num_types+1, 6))
-        scaled_params = scaled_params[:-1, :]  # 去掉最后一行全局偏移量
+        scaled_params0 = jnp.asarray(nn_output).reshape((5, 6))
+        scaled_params = scaled_params0[:-1, :]  # 去掉最后一行全局偏移量
         param_bounds = jnp.asarray(param_bounds)
         low = param_bounds[:, :, 0]
         high = param_bounds[:, :, 1]
         real_params = low + scaled_params * (high - low)
 
-        scence_offset = scaled_params[-1, :]  # 最后一行全局场景偏移量
+        scence_offset = scaled_params0[-1, :]  # 最后一行全局场景偏移量
         redlighttime_offset,\
         redlightpos2vanishpos_offset,\
         vehpos_offset,\
@@ -176,11 +177,11 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         vanishtime_offset,\
         distgap_offset = scence_offset
 
-        redlighttime_offset = redlighttime_offset*2.0
-        redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*50.0
+        redlighttime_offset = (-1.0+redlighttime_offset*2.0)*8.0
+        redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*150.0
         vehpos_offset = (-4.0+vehpos_offset*8.0)*0.1
         redlightpos_offset = redlightpos_offset*5
-        vanishtime_offset = vanishtime_offset*1.0
+        vanishtime_offset = (-1.0+vanishtime_offset*2.0)*1.0
         distgap_offset = (-2.0+distgap_offset*4.0)*0.1
         scence_offset = redlighttime_offset,\
                             redlightpos2vanishpos_offset,\
@@ -356,8 +357,27 @@ def main(args):
         decay_rate=0.99,  # 每次衰减到95%
         staircase=True
     )
-    optimizer = Adam(learning_rate=lr_schedule)
+    
+
    
+
+    optimizer = Adam(learning_rate=lr_schedule)
+    
+    #optimizer = Adamax(learning_rate=lr_schedule)
+    optimizer = RMSprop(learning_rate=lr_schedule)
+    #optimizer = Adagradient(learning_rate=lr_schedule)
+    learning_rate=0.01
+    total_epochs = 100
+    decay = learning_rate / total_epochs  # 0.01/100 = 0.0001
+    optimizer = SGD(
+        learning_rate=0.01,    # 初始学习率
+        momentum=0.95,         # 动量参数（关键！）
+        nesterov=True,        # 启用Nesterov加速
+        decay=0.0000000001            # 通常不直接用decay，用学习率调度器
+    )
+    
+    optimizer = RMSprop(learning_rate=lr_schedule)
+ 
     param_bounds = get_param_bounds(num_types)
   
     #raw_columns_list = tf.constant(raw_cols) # 将列名作为常量传递
@@ -449,11 +469,11 @@ def main(args):
             logging.info(f"Batch {batch_idx}/{total_batches}, Loss: {loss.numpy():.4f}, \
                          Time: {batch_end_time - batch_start_time:.3f}s, Remaining: {remaining_batches}")
 
-
+        
         logging.info(f"Epoch {epoch+1} 训练完成, 平均损失: {epoch_loss_avg.result().numpy():.4f}")
 
-        # 每5个epoch进行一次验证
-        if epoch % 5 == 0 or epoch == args.epochs - 1:  # 在第0, 20, 40,...个epoch以及最后一个epoch验证
+        # 每3个epoch进行一次验证
+        if epoch % 3 == 0 or epoch == args.epochs - 1:  # 在第0, 20, 40,...个epoch以及最后一个epoch验证
             val_loss_avg = tf.keras.metrics.Mean()
             total_val_batches = tf.data.experimental.cardinality(val_dataset).numpy()
             val_batch_idx = 0
@@ -475,6 +495,8 @@ def main(args):
             val_errors = np.concatenate([arr.flatten() for arr in all_val_errors])
             logging.info(f"Epoch {epoch+1} 验证完成 - 误差均值: {np.mean(val_errors):.4f}, RMSE: {np.sqrt(np.mean(np.square(val_errors))):.4f}")
             logging.info(f"{'_'*30}")
+
+  
             model_path = f"./tmpModes/model_epoch_{epoch+1}.h5"
             model.save(model_path)
             # Save validation errors
