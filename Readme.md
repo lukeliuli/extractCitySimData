@@ -107,7 +107,55 @@
                 > - 效果差证明必须考虑车辆识别缺失情况，必须做专用处理和识别
             > - (3) 双分支（回归和识别整合）模型训练和测试代码
             > - (4) 纯识别模型训练和测试代码
+        >-  修改代码genSamplesByRandomRemovingVehicle,增加函数的输出和大量的代码解释。
+            > - 其中输出加入了df_missveh2,里面有'removed_vehicles'，存储人为去掉的车辆的车道位置，命名以及在输入数据库df中的索引
         > python modelsLostReg.py --batch_size 1280 --test_size 0.5 --epochs 500 --lr 0.005 --unit 256 --layNum 8
+
+- **modelCollect5.py 当前主要测试函数** 
+    - 参考modelsCollect4.py,做如下改进:
+        - 增加要拟合的物理参数数量，增加模型复杂度
+            red_light_time_offset: float
+            redlightpos2vanishpos_offset: float
+            vehpos_offset: float
+            vehspeed_offset: float
+            vanish_time_offset: float
+            dist_gap_offset: float
+        - 基于pyGameBraxInterface4delta,  实现上述参数  模型参数可变
+    - 结果还行。对于完全神经网络模型，误差的均值减少，但是方差还大
+
+> ### **modelCollect6.py 当前主要测试函数 20260225** 
+ >   参考modelsCollect5.py,modelRegLost.py 做如下改进: 
+ >  - ### 主要功能
+    > - `modelsCollect6.py` 实现了交通仿真与端到端模型训练，支持车辆丢失自动补全，结合深度学习与JAX仿真，提升模型对缺失数据的鲁棒性。
+    > - ### 主要函数说明
+    > - `setup_logger`：日志配置，支持文件与控制台输出。
+    > - `get_param_bounds`：生成车辆参数边界。
+    > - `build_simple_resnet`：构建ResNet回归模型。
+    > - `run_batch_simulation2`：批量JAX仿真，输出主车消失时间。
+    > - `main`：主流程，包含数据处理、补车、模型训练与验证。
+> - ### 运行逻辑
+    > 1. **数据读取与预处理**
+        > - 读取原始CSV数据，生成`lost`和`removed_vehicles`列。
+        > - 通过`genDatasetLost`和`genSamplesByRandomRemovingVehcile`生成包含缺失车辆的数据集。
+        > - 合并原始与缺失数据，映射车道信息，保证样本多样性（KMeans聚类采样）
+    > 2. **缺失车辆补全**
+        > - 识别`lost`样本，利用`removed_vehicles`信息，自动补全丢失车辆。
+        > - 计算每辆车与前车的距离，构建前车ID和车间距映射。（没有使用）
+        > - 在DataFrame中更新补全后的车辆位置和速度。（直接`removed_vehicles`列中的始数据进行补全）
+    > 3. **特征与标签准备**
+        > - 明确区分特征列和仿真原始数据列。
+        > - 构建训练和验证集，支持TensorFlow数据管道。
+    > 4. **模型构建与训练**
+        > - 构建ResNet结构的回归模型，输出车辆参数与场景偏移量。
+        > - 损失函数为MSE，支持梯度裁剪和多种优化器。
+        > - 训练过程中周期性保存模型与验证误差。
+    > 5. **JAX仿真集成**
+        > - 通过`run_batch_simulation2`，将神经网络输出参数解码为IDM参数，批量调用JAX仿真。
+        > - 支持自动补全车辆后的仿真，提升模型泛化能力。
+
+
+
+
 
 ## 数据说明
 
@@ -283,3 +331,50 @@
     
 ##***提出问题***
 1.基于tranformer对物理模型进行预测，类似预测多个粒子的运动状态，给出相应的原理和代码。如果出现以下情况，1.如果已经知道一个简单的匀加速或者速度概率模型对粒子状态进行预测。2.基于统计模型，对粒子最终（而不是中间过程）分布概率已经建模，但是不知道具体参数。如何综合tranformer和1，2两种情况进行预测
+
+## modelsCollect6.py 说明
+
+### 主要功能
+`modelsCollect6.py` 实现了交通仿真与端到端模型训练，支持车辆丢失自动补全，结合深度学习与JAX仿真，提升模型对缺失数据的鲁棒性。
+
+### 运行逻辑
+1. **数据读取与预处理**
+   - 读取原始CSV数据，生成`lost`和`removed_vehicles`列。
+   - 通过`genDatasetLost`和`genSamplesByRandomRemovingVehcile`生成包含缺失车辆的数据集。
+   - 合并原始与缺失数据，映射车道信息，保证样本多样性（KMeans聚类采样）。
+
+2. **缺失车辆补全**
+   - 识别`lost`样本，利用`removed_vehicles`信息，自动补全丢失车辆。
+   - 计算每辆车与前车的距离，构建前车ID和车间距映射。
+   - 在DataFrame中更新补全后的车辆位置和速度。
+
+3. **特征与标签准备**
+   - 明确区分特征列和仿真原始数据列。
+   - 构建训练和验证集，支持TensorFlow数据管道。
+
+4. **模型构建与训练**
+   - 构建ResNet结构的回归模型，输出车辆参数与场景偏移量。
+   - 损失函数为MSE，支持梯度裁剪和多种优化器。
+   - 训练过程中周期性保存模型与验证误差。
+
+5. **JAX仿真集成**
+   - 通过`run_batch_simulation2`，将神经网络输出参数解码为IDM参数，批量调用JAX仿真。
+   - 支持自动补全车辆后的仿真，提升模型泛化能力。
+
+### 主要函数说明
+- `setup_logger`：日志配置，支持文件与控制台输出。
+- `get_param_bounds`：生成车辆参数边界。
+- `build_simple_resnet`：构建ResNet回归模型。
+- `run_batch_simulation2`：批量JAX仿真，输出主车消失时间。
+- `main`：主流程，包含数据处理、补车、模型训练与验证。
+
+### 运行方式
+```bash
+python modelsCollect6.py --batch_size 16 --epochs 20 --test_size 0.2 --lr 0.001 --unit 128 --layNum 8 --dt 0.5 --nC 100
+```
+可根据实际需求调整参数。
+
+### 适用场景
+- 交通仿真与建模
+- 端到端深度学习与物理仿真结合
+- 缺失数据自动补全与鲁棒性建模
