@@ -260,7 +260,7 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
 
 #------------------------------------------------------------------------------------------
 from modelsLostReg import genDatasetLost
-from modelsLostReg import genSamplesByRandomRemovingVehcile
+from modelsLostReg import genSamplesByRandomRemovingVehicle
 def main(args):
 
     #----------------------------------------------------------------------------------------------
@@ -271,7 +271,7 @@ def main(args):
  
     df1 = pd.read_csv(args.csv_path).dropna()
     df1['lost'] = 0
-    df1['removed_vehicles'] = [(-1,-1,-1)]    
+    df1['removed_vehicles'] = None   
     df1.rename(columns={'car_position': 'main_car_position'}, inplace=True)
     df1.rename(columns={'car_speed': 'main_car_speed'}, inplace=True)
 
@@ -286,7 +286,7 @@ def main(args):
     
     print(f"{'-'*100}")
     ## 生成数据，去掉车,其中df_missveh2，加入列df_missveh：['removed_vehicles'] = removed_vehicles_posi
-    df_missveh,queued_info,df_missveh2 = genSamplesByRandomRemovingVehcile(df1, remove_ratio=0.1)
+    df_missveh,queued_info,df_missveh2 = genSamplesByRandomRemovingVehicle(df1, remove_ratio=0.1)
     print('len(queued_vehicles_removed):',len(queued_info)) 
     print(f"{'-'*100}")
     #检测一下df_missveh2中，丢失的车辆位置是否正确
@@ -396,10 +396,10 @@ def main(args):
     lost_positions = []
     for idx in lost_indices:
         removed = df.at[idx, 'removed_vehicles']
-        if isinstance(removed, (list, tuple)) and removed != [(-1, -1, -1)]:
+        if removed is not None:
             for val in removed:
                 if isinstance(val, (list, tuple)) and len(val) >= 2:
-                    lost_positions.append((idx, val[1],val[2]))  # (样本索引, 丢失车辆位置)
+                    lost_positions.append((idx, val[1],val[2]))  # (df样本索引, 丢失车辆位置,车辆命名iname)
 
     # 在丢失位置处补车，位置为前后车的中间值或者直接用原始值（当前）
     for idx in lost_indices:

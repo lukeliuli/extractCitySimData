@@ -208,6 +208,7 @@ __marimo__/
 
 frames/
 framesTmp/
+tmpModes/
 gifs/
 trajs/
 simulation_frames/
@@ -215,3 +216,4 @@ simulation_frames/
 *.csv
 *.pkl
 *.h5
+*.png
