@@ -172,7 +172,7 @@ def genSamplesByRandomRemovingVehicle(df, remove_ratio=0.1):
    
     removed_rows = []
     removed_rows1 = []
-    columns = df.columns.tolist()
+    
     # 获取所有车辆位置列和速度列
     car_pos_cols = [col for col in df.columns if col.startswith('car_position_')]
     car_speed_cols = [col for col in df.columns if col.startswith('car_speed_')]
@@ -283,10 +283,11 @@ def genSamplesByRandomRemovingVehicle(df, remove_ratio=0.1):
                 #print(queued_vehicles)
                 results.append(queued_vehicles)
 
-    df_missveh = pd.DataFrame(removed_rows, columns=df.columns)   
+    df_missveh = pd.DataFrame(removed_rows)   
+    df_missveh2 = pd.DataFrame(removed_rows1) 
     
-    columns2  = df.columns+['removed_vehicles']
-    df_missveh2 = pd.DataFrame(removed_rows1, columns=columns2) 
+    #print(removed_rows[0])#调试用
+    #print(removed_rows1[0])#调试用
     return df_missveh,results,df_missveh2
 
 #--------------------------------------------------------------------------------------------------------
@@ -362,7 +363,7 @@ def genDatasetLost(df,test_size,batch_size):
 
     # 创建 tf.data.Dataset - 只包含输入X和目标y，raw_data用于其他用途
     train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-    train_dataset = train_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+    train_dataset = train_dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)
 
     val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
     val_dataset = val_dataset.batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE)

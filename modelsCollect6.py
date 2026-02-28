@@ -262,7 +262,8 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
 from modelsLostReg import genDatasetLost
 from modelsLostReg import genSamplesByRandomRemovingVehicle
 def main(args):
-
+    test_size = args.test_size
+    batch_size = args.batch_size
     #----------------------------------------------------------------------------------------------
     #第一步，读入原始数据，加入lost和removed_vehicles列,并生成训练数据集和验证数据集合
     setup_logger(args.log_path, args.debug)
@@ -277,7 +278,7 @@ def main(args):
 
     X_train1, X_val1, y_train1, y_val1, \
         raw_train1, raw_val1, train_dataset1, val_dataset1,\
-            raw_cols1     = genDatasetLost(df1, args.test_size, args.batch_size)#简单生成数据，没有去掉车
+            raw_cols1     = genDatasetLost(df1, test_size, batch_size)#简单生成数据，没有去掉车
     df_step1 = df1.copy()
 
     #----------------------------------------------------------------------------------------------
@@ -287,32 +288,43 @@ def main(args):
     print(f"{'-'*100}")
     ## 生成数据，去掉车,其中df_missveh2，加入列df_missveh：['removed_vehicles'] = removed_vehicles_posi
     df_missveh,queued_info,df_missveh2 = genSamplesByRandomRemovingVehicle(df1, remove_ratio=0.1)
-    print('len(queued_vehicles_removed):',len(queued_info)) 
-    print(f"{'-'*100}")
-    #检测一下df_missveh2中，丢失的车辆位置是否正确
-    for idx, row in df_missveh2.iterrows():
-        removed_vehicles_posi = row['removed_vehicles']
-        for val in removed_vehicles_posi:
-            idx,pos,car_posi = val  # Extract position from tuple (idx, pos, car_posi)
-            print(f"Sample car_pos {car_posi}: Checking removed vehicle at position {pos:.2f}")
-    print(f"{'-'*100}")   
     
+    print('len(queued_vehicles_removed):',len(queued_info)) 
+   
+    print(f"{'-'*100}")
+    
+    #调试用，检测一下df_missveh2中，丢失的车辆位置是否正确
+    '''
+    print(df_missveh.iloc[0])
+    print(df_missveh2.iloc[0])
+    for idx, row in df_missveh2.iterrows():
+        print(f"{'-'*5}") 
+        removed_vehicles = row['removed_vehicles']
+        print(removed_vehicles)   
+        for val in removed_vehicles:
+            if val is not None:
+                idx,pos,car_posi = val  # Extract position from tuple (idx, pos, car_posi)
+                print(f"Sample car_pos_{car_posi}: Checking removed vehicle at position {pos:.2f}")
+
+    print(f"{'-'*100}")   
+    '''
+    #调试结束
     df_missveh['lost'] = 1
     df_missveh2['lost'] = 1
     X_train2, X_val2, y_train2, y_val2, \
         raw_train2, raw_val2, train_dataset2, val_dataset2, \
             raw_cols2 = genDatasetLost(df_missveh2, args.test_size, args.batch_size  )
      
-    df_step2_missveh2 = df_missveh2.copy()#df_missveh2，相对于df_missveh加入列['removed_vehicles']
+    df_step2_missveh2 = df_missveh2.copy()#df_missve的['removed_vehicles']为None,df_missveh2['removed_vehicles']为具体删除车辆的信息位置和名称
     df_step2_missveh = df_missveh.copy()
 
     #---------------------------------------------------------------------------------------------
     #第三步，将两部分数据合并，加入intersection_pos列，并随机抽样1000个样本，保证样本多样性
-
+    
     df_all = pd.concat([df1, df_missveh2], ignore_index=True)
     lane_pos_map = {5: 53.05, 6: 53.13, 7: 53.30}
     df_all['intersection_pos'] = df_all['lane'].map(lane_pos_map)
-
+    print(df_all.iloc[0])
     
     #--------------------------------------------------------------------------------------------------------
     # 随机提取args.nC个样本，尽可能保证样本多样性
@@ -350,7 +362,7 @@ def main(args):
     
 
     dt = args.dt
-    logging.info(f"使用时间步长 dt={dt} 进行仿真")
+    logging.info(f"使用时间步长 dt={dt} 进行仿真。采样样本数为:{len(df)}")
 
     #-----------------------------------------------------------------------------------------------
     #第四步，处理缺失数据，补车
