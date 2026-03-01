@@ -303,14 +303,13 @@ def main(args):
         print(removed_vehicles)   
         for val in removed_vehicles:
             if val is not None:
-                idx,pos,car_posi = val  # Extract position from tuple (idx, pos, car_posi)
+                pos_col,pos,car_posi = val  # Extract position from tuple (pos_col,pos,car_posi)
                 print(f"Sample car_pos_{car_posi}: Checking removed vehicle at position {pos:.2f}")
 
     print(f"{'-'*100}")   
     '''
     #调试结束
-    df_missveh['lost'] = 1
-    df_missveh2['lost'] = 1
+ 
     X_train2, X_val2, y_train2, y_val2, \
         raw_train2, raw_val2, train_dataset2, val_dataset2, \
             raw_cols2 = genDatasetLost(df_missveh2, args.test_size, args.batch_size  )
@@ -367,6 +366,8 @@ def main(args):
     #-----------------------------------------------------------------------------------------------
     #第四步，处理缺失数据，补车
 
+    #方法0，不补。用于比较
+
     #-----------------------------------------------------------------------------------------------
     #识别当前样本是否有缺失数据
     #1.采用简单方法判别，就是与前车的距离是否大于某个阈值，比如5米，就认为中间有车丢失
@@ -375,90 +376,83 @@ def main(args):
 
     #缺失数据修改start-----------------------------------------------------------------------------------------------
     # 方法1. 计算每辆车与前车的距离(没有完成)
-    lost_indices = df.index[df['lost'] == 1].tolist()
-    car_pos_cols = [col for col in df.columns if col.startswith('car_position_')]
-    front_car_ids = [{} for _ in range(df.shape[0])]  # 存储每个样本的前车ID映射
-    car_gaps = [{} for _ in range(df.shape[0])] # 存储每个样本的车间距映射
-    for idx in lost_indices:
-        data = df.loc[idx]
-        data_car_positions = data[car_pos_cols]
-        # 获取当前样本的所有车辆位置和对应的列名
-        valid = []
-        for i, pos in enumerate(data_car_positions):
-            col_name = car_pos_cols[i]
-            if pos != -1:
-               valid.append((pos, col_name))
-        
-        # 按位置从大到小排序
-        sorted_valid = sorted(valid, key=lambda x: -x[0])
-        for idx2 in range(1, len(sorted_valid)):
-            curr_id = sorted_valid[idx2][1]  # 获取id = col_name
-            prev_id = sorted_valid[idx2 - 1][1]
-            cur_pos =  sorted_valid[idx2][0]
-            prev_pos = sorted_valid[idx2 - 1][0]
-            front_car_ids[idx][curr_id] = prev_id
-            car_gaps[idx][curr_id] = prev_pos - cur_pos
+    if 0:
+        lost_indices = df.index[df['lost'] == 1].tolist()
+        car_pos_cols = [col for col in df.columns if col.startswith('car_position_')]
+        front_car_ids = [{} for _ in range(df.shape[0])]  # 存储每个样本的前车ID映射
+        car_gaps = [{} for _ in range(df.shape[0])] # 存储每个样本的车间距映射
+        for idx in lost_indices:
+            data = df.loc[idx]
+            data_car_positions = data[car_pos_cols]
+            # 获取当前样本的所有车辆位置和对应的列名
+            valid = []
+            for i, pos in enumerate(data_car_positions):
+                col_name = car_pos_cols[i]
+                if pos != -1:
+                    valid.append((pos, col_name))
+            
+            # 按位置从大到小排序
+            sorted_valid = sorted(valid, key=lambda x: -x[0])
+            for idx2 in range(1, len(sorted_valid)):
+                curr_id = sorted_valid[idx2][1]  # 获取id = col_name
+                prev_id = sorted_valid[idx2 - 1][1]
+                cur_pos =  sorted_valid[idx2][0]
+                prev_pos = sorted_valid[idx2 - 1][0]
+                front_car_ids[idx][curr_id] = prev_id
+                car_gaps[idx][curr_id] = prev_pos - cur_pos
 
        
-
-
-
-    # 方法2. 根据'lost'和'removed_vehicles'列，给出车辆丢失的位置
+    # 方法2. 直接用原来的数据补,速度靠前车速度,简单点
+    print('方法2修补数据')
     lost_indices = df.index[df['lost'] == 1].tolist()
-    lost_positions = []
     for idx in lost_indices:
-        removed = df.at[idx, 'removed_vehicles']
-        if removed is not None:
-            for val in removed:
-                if isinstance(val, (list, tuple)) and len(val) >= 2:
-                    lost_positions.append((idx, val[1],val[2]))  # (df样本索引, 丢失车辆位置,车辆命名iname)
+        removed_vehs = df.at[idx, 'removed_vehicles']#(丢失车辆命名,丢失车辆位置,车辆命名i的int值)
+        for i in range(len(removed_vehs)):
+            car_pos_col,car_pos,car_pos_i = removed_vehs[i]
+            df.at[idx, f'car_position_{car_pos_i}'] = car_pos
+        
+            car_speed_i = max(0,car_pos_i-1)#一般而言，前车(小i值)一般有，car_pos样本中一般都是距离红灯距离，car_pos_i越小距离红灯越近（不绝对）
+            df.at[idx, f'car_speed_{car_pos_i}'] = df.at[idx, f'car_speed_{car_speed_i}']
 
-    # 在丢失位置处补车，位置为前后车的中间值或者直接用原始值（当前）
-    for idx in lost_indices:
-        removed = df.at[idx, 'removed_vehicles']
-        car_positions1 = df.loc[idx, [c for c in df.columns if c.startswith('car_position_')]].values
-        car_speed1 = df.loc[idx, [c for c in df.columns if c.startswith('car_speed_')]].values
 
-        car_positions1 = [c for c in car_positions1 if c != -1]
-        car_speed1 =  [c for c in car_speed1 if c != -1]
-        car_status = [(pos, speed) for pos, speed in zip(car_positions1, car_speed1)]#当前row中，非-1的车辆位置和速度列表
-        '''
-        #简单方法直接补，不用于实际，用于测试仿真
-        if isinstance(removed, (list, tuple)) and removed != [(-1, -1, -1)]:
-            for val in removed:
-                lost_pos = val[1]  # 丢失车辆的位置
-                #car_posi = val[2] 
-                car_positions1.append(lost_pos)
-        car_positions1 = sorted(car_positions1, reverse=True)
-        '''
-        if isinstance(removed, (list, tuple)) and removed != [(-1, -1, -1)]:
-            for val in removed:
-                lost_pos = val[1]  # 丢失车辆的位置
-                lost_iname = val[2]  #丢失车辆的命名（car_posi）
-                
-                indexTmp = np.argmin(np.abs(car_positions1 - lost_pos))
-                if lost_pos > car_positions1[indexTmp]:
-                    val = car_positions1[indexTmp]+5.0
+
+
+    # 方法3. 根据'lost'和'removed_vehicles'列，车辆丢失的位置,前车-5，或者后车+5
+    if 0:
+        print('方法3修补数据')
+        lost_indices = df.index[df['lost'] == 1].tolist()
+        for idx in lost_indices:
+            car_positions1 = df.loc[idx, [c for c in df.columns if c.startswith('car_position_')]].values
+            car_speed1 = df.loc[idx, [c for c in df.columns if c.startswith('car_speed_')]].values
+
+            car_positions1 = [c for c in car_positions1 if c != -1]
+            car_speed1 =  [c for c in car_speed1 if c != -1]
+            car_status = [(pos, speed) for pos, speed in zip(car_positions1, car_speed1)]#当前row中，非-1的车辆位置和速度列表
+            
+            removed_vehs = df.at[idx, 'removed_vehicles']#(丢失车辆命名,丢失车辆位置,车辆命名i的int值)
+            for i in range(len(removed_vehs)):
+                car_pos_col,car_pos,car_pos_i = removed_vehs[i]
+
+                indexTmp = np.argmin(np.abs(car_positions1-car_pos))
+                #车辆丢失的位置,前车+5，或者后车-5
+                if car_pos > car_positions1[indexTmp]:#car_pos样本中一般都是距离红灯距离
+                    car_pos_pTmp= car_positions1[indexTmp]+5.0
                 else:
-                    val = car_positions1[indexTmp]-5.0
-                car_status.append((lost_pos, car_speed1[indexTmp],lost_iname)) #直接用原始值
-                #or car_status.append((lost_pos, car_speed1[indexTmp],lost_iname))#直接用前后值代替，后期用于对比
-        car_status = sorted(car_status, key=lambda x: x[0]) #按位置排序
-       
+                    car_pos_pTmp= car_positions1[indexTmp]-5.0
+                
+                df.at[idx, f'car_position_{car_pos_i}'] = car_pos_pTmp#直接用最近车位置的+或者-代替
+                df.at[idx, f'car_speed_{car_pos_i}'] = car_speed1[indexTmp]#直接用最近车的速度代替
+        
 
         
 
-        # 更新DataFrame中的车辆位置列
-        # 获取当前样本的车辆位置列名
-        for i, (pos, speed,iname) in enumerate(car_status):
-            df.at[idx, f'car_position_{iname}'] = pos
-            df.at[idx, f'car_speed_{iname}'] = speed
-   
             
 
                 
 
     df_step4_lostfilled = df.copy()
+    print(lost_indices[0])
+    print(df.iloc[lost_indices[0]])
     #第四步，处理缺失数据，补车。缺失数据修改end-----------------------------------------------------------------------------------------------
     
 
@@ -468,18 +462,19 @@ def main(args):
     # --- 修改开始 ---
     # 明确区分特征列和传递给仿真的原始数据列
     feature_cols = [c for c in df.columns if ('car_position_' in c or 'car_speed_' in c or 'redLight' in c)]
-    
+    #feature_cols.add('main_car_position')#这里特征没有加入 main_car_position,原因是采用模拟方法，下面raw_cols_set加入了main_car_position，会提取相应主车的最终时间Y.而直接黑盒预测需要加入main_car_position
     # 为仿真准备的列，确保没有重复
     # 我们需要所有特征列，以及一些额外的信息
     raw_cols_set = set(feature_cols)
     raw_cols_set.add('lane')
     raw_cols_set.add('intersection_pos')
+    raw_cols_set.add('main_car_position')
 
     
     raw_cols = sorted(list(raw_cols_set)) # 排序以保证列顺序一致
 
     X = df[feature_cols].values.astype(np.float32)
-    y = (df['time_to_vanish'].values / 30.0).astype(np.float32)#注意已经除以30了
+    y = (df['time_to_vanish'].values / 30.0).astype(np.float32)#注意已经除以30了,仿真中还会对redLight，car_pos进行进一步处理
     raw_data_for_sim = df[raw_cols].values.astype(np.float32)
     # --- 修改结束 ---
     
@@ -688,7 +683,7 @@ if __name__ == "__main__":
     main(args)
 
 #python modelsCollect4.py --batch_size 16 --layNum 4
-#python modelsCollect5.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.0005 --unit 256 --layNum 16 --dt 0.1 --nC 100
+#python modelsCollect6.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.0005 --unit 256 --layNum 16 --dt 0.1 --nC 100
 
 
 
