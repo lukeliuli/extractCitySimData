@@ -367,7 +367,8 @@ def main(args):
     #第四步，处理缺失数据，补车
 
     #方法0，不补。用于比较
-
+    print('方法0不修补数据，直接仿真')
+    lost_indices = df.index[df['lost'] == 1].tolist()
     #-----------------------------------------------------------------------------------------------
     #识别当前样本是否有缺失数据
     #1.采用简单方法判别，就是与前车的距离是否大于某个阈值，比如5米，就认为中间有车丢失
@@ -403,22 +404,23 @@ def main(args):
 
        
     # 方法2. 直接用原来的数据补,速度靠前车速度,简单点
-    print('方法2修补数据')
-    lost_indices = df.index[df['lost'] == 1].tolist()
-    for idx in lost_indices:
-        removed_vehs = df.at[idx, 'removed_vehicles']#(丢失车辆命名,丢失车辆位置,车辆命名i的int值)
-        for i in range(len(removed_vehs)):
-            car_pos_col,car_pos,car_pos_i = removed_vehs[i]
-            df.at[idx, f'car_position_{car_pos_i}'] = car_pos
-        
-            car_speed_i = max(0,car_pos_i-1)#一般而言，前车(小i值)一般有，car_pos样本中一般都是距离红灯距离，car_pos_i越小距离红灯越近（不绝对）
-            df.at[idx, f'car_speed_{car_pos_i}'] = df.at[idx, f'car_speed_{car_speed_i}']
+    if 0:
+        print('方法2修补数据')
+        lost_indices = df.index[df['lost'] == 1].tolist()
+        for idx in lost_indices:
+            removed_vehs = df.at[idx, 'removed_vehicles']#(丢失车辆命名,丢失车辆位置,车辆命名i的int值)
+            for i in range(len(removed_vehs)):
+                car_pos_col,car_pos,car_pos_i = removed_vehs[i]
+                df.at[idx, f'car_position_{car_pos_i}'] = car_pos
+            
+                car_speed_i = max(0,car_pos_i-1)#一般而言，前车(小i值)一般有，car_pos样本中一般都是距离红灯距离，car_pos_i越小距离红灯越近（不绝对）
+                df.at[idx, f'car_speed_{car_pos_i}'] = df.at[idx, f'car_speed_{car_speed_i}']
 
 
 
 
     # 方法3. 根据'lost'和'removed_vehicles'列，车辆丢失的位置,前车-5，或者后车+5
-    if 0:
+    if 1:
         print('方法3修补数据')
         lost_indices = df.index[df['lost'] == 1].tolist()
         for idx in lost_indices:
