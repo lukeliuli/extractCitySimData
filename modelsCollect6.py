@@ -429,13 +429,15 @@ def main(args):
 
             car_positions1 = [c for c in car_positions1 if c != -1]
             car_speed1 =  [c for c in car_speed1 if c != -1]
-            car_status = [(pos, speed) for pos, speed in zip(car_positions1, car_speed1)]#当前row中，非-1的车辆位置和速度列表
+           
             
             removed_vehs = df.at[idx, 'removed_vehicles']#(丢失车辆命名,丢失车辆位置,车辆命名i的int值)
             for i in range(len(removed_vehs)):
                 car_pos_col,car_pos,car_pos_i = removed_vehs[i]
-
-                indexTmp = np.argmin(np.abs(car_positions1-car_pos))
+                car_positions1 = np.array(car_positions1)  
+                tmp = car_positions1-car_pos
+                
+                indexTmp = np.argmin(np.abs(tmp))
                 #车辆丢失的位置,前车+5，或者后车-5
                 if car_pos > car_positions1[indexTmp]:#car_pos样本中一般都是距离红灯距离
                     car_pos_pTmp= car_positions1[indexTmp]+5.0
