@@ -314,7 +314,7 @@ def main(args):
         raw_train2, raw_val2, train_dataset2, val_dataset2, \
             raw_cols2 = genDatasetLost(df_missveh2, args.test_size, args.batch_size  )
      
-    df_step2_missveh2 = df_missveh2.copy()#df_missve的['removed_vehicles']为None,df_missveh2['removed_vehicles']为具体删除车辆的信息位置和名称
+    df_step2_missveh2 = df_missveh2.copy()#df_missveh的['removed_vehicles']为None,df_missveh2['removed_vehicles']为具体删除车辆的信息位置和名称
     df_step2_missveh = df_missveh.copy()
 
     #---------------------------------------------------------------------------------------------
@@ -687,7 +687,7 @@ if __name__ == "__main__":
     main(args)
 
 #python modelsCollect4.py --batch_size 16 --layNum 4
-#python modelsCollect6.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.0005 --unit 256 --layNum 16 --dt 0.1 --nC 100
+#python modelsCollect6.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.0005 --unit 256 --layNum 16 --dt 0.1 --nC 500
 
 
 
