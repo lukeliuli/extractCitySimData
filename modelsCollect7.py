@@ -27,6 +27,22 @@ from pyGameBraxInterface4delta import IDMParams, EnvState,initial_env_state_pure
 from sklearn.cluster import KMeans
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+import jax
+from tensorflow import keras
+import gc
+import jax.numpy as jnp
+
+def force_clean_all_memory():
+    """硬核清理：JAX+Keras+系统内存，彻底释放无效占用"""
+    # 1. 清理Keras计算图
+    keras.backend.clear_session()
+    # 3. 强制解绑所有JAX张量引用（核心！解决释放无效）
+    jnp.zeros((1,)).delete()
+    # 4. 手动触发系统垃圾回收
+    gc.collect()
+
+    print("✅ 已强制释放所有无效内存/显存")
+    
 def format_tensor(tensor, decimals=1):
     """格式化张量到指定小数位数"""
     # 乘以 10^decimals，取整，再除以 10^decimals
@@ -134,6 +150,45 @@ def build_simple_resnet(input_dim, output_dim, unit=256, layNum=8):
     model = Model(inputs=inp, outputs=out)
     return model
 
+##回归模型
+def build_simple_resnet_regress(input_dim, output_dim, unit=256, layNum=8):
+
+
+    def resnet_block(x, units):
+        shortcut = x
+
+        # 第一个 Dense -> BN -> ReLU
+        y = Dense(units)(x)
+        y = BatchNormalization()(y)
+        y = ReLU()(y)
+
+        # 第二个 Dense -> BN
+        y = Dense(units)(y)
+        y = BatchNormalization()(y)
+
+        # 如果维度不匹配，使用1x1卷积调整shortcut
+        if shortcut.shape[-1] != units:
+            shortcut = Dense(units)(shortcut)
+
+        # Add & 最后的ReLU
+        y = Add()([shortcut, y])
+        y = ReLU()(y)
+        return y
+
+    inp = Input(shape=(input_dim,))
+    # 初始块: Dense -> BN -> ReLU
+    x = Dense(unit)(inp)
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+
+    for _ in range(layNum):
+        x = resnet_block(x, unit)
+
+
+ 
+    out = Dense(1, activation='linear', name='vanish_time')(x)  # 线性激活，输出时间值
+    model = Model(inputs=inp, outputs=out)
+    return model
 
 
 def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_types, columns=None,dt=0.5):
@@ -265,8 +320,12 @@ from modelsLostReg import genSamplesByRandomRemovingVehicle
 def main(args):
     test_size = args.test_size
     batch_size = args.batch_size
-    #----------------------------------------------------------------------------------------------
-    #第一步，读入原始数据，加入lost和removed_vehicles列,并生成训练数据集和验证数据集合
+    
+    # ==============================================
+    # 🚕：第一步，读入原始数据，加入lost和removed_vehicles列（无数据）,并生成训练数据集和验证数据集合
+    # ==============================================
+    
+
     setup_logger(args.log_path, args.debug)
     logging.info(f"启动训练，参数: {args}")
     logging.info(f"从 {args.csv_path} 加载数据...")
@@ -282,10 +341,10 @@ def main(args):
             raw_cols1     = genDatasetLost(df1, test_size, batch_size)#简单生成数据，没有去掉车
     df_step1 = df1.copy()
 
-    #----------------------------------------------------------------------------------------------
-    #第二步，随机去掉部分车辆，生成缺失数据样本，加入lost和removed_vehicles列,并生成训练数据集和验证数据集合
-         
-    
+    # ==============================================
+    # 🚕：第二步，随机去掉部分车辆，生成缺失数据样本，加入lost和removed_vehicles列,并生成训练数据集和验证数据集合
+    # ==============================================
+
     print(f"{'-'*100}")
     ## 生成数据，去掉车,其中df_missveh2，加入列df_missveh：['removed_vehicles'] = removed_vehicles_posi
     df_missveh,queued_info,df_missveh2 = genSamplesByRandomRemovingVehicle(df1, remove_ratio=0.1)
@@ -318,8 +377,10 @@ def main(args):
     df_step2_missveh2 = df_missveh2.copy()#df_missveh的['removed_vehicles']为None,df_missveh2['removed_vehicles']为具体删除车辆的信息位置和名称
     df_step2_missveh = df_missveh.copy()
 
-    #---------------------------------------------------------------------------------------------
-    #第三步，将两部分数据合并，加入intersection_pos列，并随机抽样1000个样本，保证样本多样性
+    
+    # ==============================================
+    # 🚕：第三步，将两部分数据合并，加入intersection_pos列，并随机抽样1000个样本，保证样本多样性
+    # ==============================================
     
     df_all = pd.concat([df1, df_missveh2], ignore_index=True)
     lane_pos_map = {5: 53.05, 6: 53.13, 7: 53.30}
@@ -364,12 +425,14 @@ def main(args):
     dt = args.dt
     logging.info(f"使用时间步长 dt={dt} 进行仿真。采样样本数为:{len(df)}")
 
-    #-----------------------------------------------------------------------------------------------
-    #第四步，处理缺失数据，补车
+    # ==============================================
+    # 🚕：第四步，处理是否修补数据
+    # ==============================================
 
     #方法0，不补。用于比较
-    print('方法0不修补数据，直接仿真')
-    lost_indices = df.index[df['lost'] == 1].tolist()
+    if args.fixdata == 0:
+        lost_indices = df.index[df['lost'] == 1].tolist()
+        print(f'方法0不修补数据，直接仿真。采样样本数为:{len(df)}，缺失样本数{len(lost_indices)}')
     #-----------------------------------------------------------------------------------------------
     #识别当前样本是否有缺失数据
     #1.采用简单方法判别，就是与前车的距离是否大于某个阈值，比如5米，就认为中间有车丢失
@@ -405,8 +468,8 @@ def main(args):
 
        
     # 方法2. 直接用原来的数据补,速度靠前车速度,简单点
-    if 0:
-        print('方法2修补数据')
+    if args.fixdata == 1:
+        print('方法1修补数据')
         lost_indices = df.index[df['lost'] == 1].tolist()
         for idx in lost_indices:
             removed_vehs = df.at[idx, 'removed_vehicles']#(丢失车辆命名,丢失车辆位置,车辆命名i的int值)
@@ -420,9 +483,9 @@ def main(args):
 
 
 
-    # 方法3. 根据'lost'和'removed_vehicles'列，车辆丢失的位置,前车-5，或者后车+5
-    if 1:
-        print('方法3修补数据')
+    # 方法2. 根据'lost'和'removed_vehicles'列，车辆丢失的位置,前车-5，或者后车+5
+    if args.fixdata == 2:
+        print('方法2修补数据,+—5前后车')
         lost_indices = df.index[df['lost'] == 1].tolist()
         for idx in lost_indices:
             car_positions1 = df.loc[idx, [c for c in df.columns if c.startswith('car_position_')]].values
@@ -460,14 +523,14 @@ def main(args):
     print(df.iloc[lost_indices[0]])
     #第四步，处理缺失数据，补车。缺失数据修改end-----------------------------------------------------------------------------------------------
     
-
-    #-----------------------------------------------------------------------------------------------
-    #第五步，开始处理数据，准备训练数据集和验证数据集
     
-    # --- 修改开始 ---
+    # ==============================================
+    # 🚕：第五步，开始处理数据，准备训练数据集和验证数据集
+    # ==============================================
     # 明确区分特征列和传递给仿真的原始数据列
     feature_cols = [c for c in df.columns if ('car_position_' in c or 'car_speed_' in c or 'redLight' in c)]
-    #feature_cols.add('main_car_position')#这里特征没有加入 main_car_position,原因是采用模拟方法，下面raw_cols_set加入了main_car_position，会提取相应主车的最终时间Y.而直接黑盒预测需要加入main_car_position
+    #feature_cols.add('main_car_position')#这里特征没有加入 main_car_position,原因是采用模拟方法，
+    #下面raw_cols_set加入了main_car_position，会提取相应主车的最终时间Y.而直接黑盒预测需要加入main_car_position
     # 为仿真准备的列，确保没有重复
     # 我们需要所有特征列，以及一些额外的信息
     raw_cols_set = set(feature_cols)
@@ -481,209 +544,232 @@ def main(args):
     X = df[feature_cols].values.astype(np.float32)
     y = (df['time_to_vanish'].values / 30.0).astype(np.float32)#注意已经除以30了,仿真中还会对redLight，car_pos进行进一步处理
     raw_data_for_sim = df[raw_cols].values.astype(np.float32)
-    # --- 修改结束 ---
-    
-
-
-
-    #------------------------------------------------------------------------------------------------
     
     X_train, X_val, y_train, y_val, raw_train, raw_val = train_test_split(
         X, y, raw_data_for_sim, test_size=args.test_size, random_state=42
     )
-
-    
-    # 创建 tf.data.Dataset
-    train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train, raw_train))
-    #train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
-    train_dataset = train_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
-
-    val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val, raw_val))
-    val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
-
-    logging.info(f"数据准备完成: {len(X_train)} 训练样本, {len(X_val)} 验证样本")
-    
    
+    # ==============================================
+    # 💎 # 功能：mlp+cf参数+全局参数 模型构建 + 训练 + 验证 + 保存，注意需要1,2,3,4,5步，
+    # ==============================================
     
+    if args.model == 0:
+        # 创建 tf.data.Dataset
+        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train, raw_train))
+        #train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+        train_dataset = train_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+
+        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val, raw_val))
+        val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+
+        logging.info(f"数据准备完成: {len(X_train)} 训练样本, {len(X_val)} 验证样本")
+        logging.info(f"数据准备完成: X_train.shape:{X_train.shape}, y_train.shape:{y_train.shape}")
+        logging.info(f"数据准备完成: X_val.shape:{X_val.shape}, y_val.shape:{y_val.shape}")
+        #mlp+cf参数+全局参数 模型构建 + 训练 + 验证 + 保存
+        train_model(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt)
     
+
     
     
     # ==============================================
-    # 💎【代码块1】
-    # 功能：构建MLP+CF模型 ，并训练和验证
+    # 💎 # 功能：mlp+regress,直接预测vansishTime, 模型构建 + 训练 + 验证 + 保存
     # ==============================================
-    
-    
-    num_types = args.num_types
-    num_types2 = num_types+1;#增加6个参数，作为全局偏移量
-    output_dim = num_types2 * 6
-    model = build_simple_resnet(X_train.shape[1], output_dim, args.unit, args.layNum)
+    if args.model == 1:
+        # 创建 tf.data.Dataset
+        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
+        #train_dataset = train_dataset.shuffle(buffer_size=len(X_train)).batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
+        train_dataset = train_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
 
-    # 使用学习率调度器，开始时学习率较高，然后逐渐降低
-    initial_learning_rate = args.lr
-    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate,
-        decay_steps=100,  # 每100步衰减
-        decay_rate=0.99,  # 每次衰减到95%
-        staircase=True
-    )
-    
+        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
+        val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.experimental.AUTOTUNE)
 
-   
-
-    optimizer = Adam(learning_rate=lr_schedule)
-    
-    #optimizer = Adamax(learning_rate=lr_schedule)
-    optimizer = RMSprop(learning_rate=lr_schedule)
-    #optimizer = Adagradient(learning_rate=lr_schedule)
-    learning_rate=0.01
-    total_epochs = 100
-    decay = learning_rate / total_epochs  # 0.01/100 = 0.0001
-    optimizer = SGD(
-        learning_rate=0.01,    # 初始学习率
-        momentum=0.95,         # 动量参数（关键！）
-        nesterov=True,        # 启用Nesterov加速
-        decay=0.0000000001            # 通常不直接用decay，用学习率调度器
-    )
-    
-    optimizer = RMSprop(learning_rate=lr_schedule)
- 
-    param_bounds = get_param_bounds(num_types)
+        logging.info(f"数据准备完成: {len(X_train)} 训练样本, {len(X_val)} 验证样本")
+        logging.info(f"数据准备完成: X_train.shape:{X_train.shape}, y_train.shape:{y_train.shape}")
+        logging.info(f"数据准备完成: X_val.shape:{X_val.shape}, y_val.shape:{y_val.shape}")
+        #mlp+cf参数+全局参数 模型构建 + 训练 + 验证 + 保存
+        train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt)
   
-    #raw_columns_list = tf.constant(raw_cols) # 将列名作为常量传递
-    raw_columns_list = raw_cols
-    logging.info(f"模型创建完成: {num_types} 个车辆类别, ResNet输出维度 {output_dim}")
 
+
+
+
+
+
+
+# ==============================================
+# 💎【代码块1 已封装成独立函数】
+# 功能：mlp+cf参数+全局参数 模型构建 + 训练 + 验证 + 保存
+# ==============================================
+def train_model(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt):
+    num_types = args.num_types
+    num_types2 = num_types + 1
+    output_dim = num_types2 * 6
+
+    # 构建模型
+    model = build_simple_resnet(X_train.shape[1], output_dim, args.unit, args.layNum)
+    param_bounds = get_param_bounds(num_types)
+    raw_columns_list = raw_cols
+
+    # 学习率调度器
+    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        args.lr, decay_steps=100, decay_rate=0.99, staircase=True
+    )
+    optimizer = RMSprop(learning_rate=lr_schedule)
+
+    # 训练步
     @tf.function
     def train_step(x_batch, y_batch, raw_batch):
-        
         with tf.GradientTape() as tape:
-            # ResNet forward pass
             nn_output = model(x_batch, training=True)
-            #tf.print(f"nn_output:\n {nn_output}")
-            # JAX simulation as a black-box function
             predicted_times = tf.py_function(
                 func=lambda nn_out, raw: run_batch_simulation2(
-                    nn_out, raw, param_bounds, num_types, columns=raw_columns_list,dt=dt
+                    nn_out, raw, param_bounds, num_types, columns=raw_columns_list, dt=dt
                 ),
                 inp=[nn_output, raw_batch],
                 Tout=tf.float32
             )
-            
-            # 显式设置形状信息，帮助 TensorFlow 推断
-            # predicted_times 来自JAX函数，需要明确设置形状
-            batch_size = tf.shape(y_batch)[0]  # 获取批次大小
-            predicted_times = tf.reshape(predicted_times, [batch_size])  # Reshape to [batch_size]
-            y_batch = tf.reshape(y_batch, [batch_size])  # Reshape to [batch_size]
-
-            # Loss computation with MSE + MAE for better convergence
-            # Loss computation with MSE for stable gradients
+            batch_size = tf.shape(y_batch)[0]
+            predicted_times = tf.reshape(predicted_times, [batch_size])
+            y_batch = tf.reshape(y_batch, [batch_size])
             loss = tf.reduce_mean(tf.square(predicted_times - y_batch))
-        
-        # Backward pass and parameter update with gradient clipping
+
         grads = tape.gradient(loss, model.trainable_variables)
-        # Apply gradient clipping to prevent gradient explosion
-        clipped_grads = [tf.clip_by_norm(grad, 1.0) if grad is not None else grad for grad in grads]
+        clipped_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in grads]
         optimizer.apply_gradients(zip(clipped_grads, model.trainable_variables))
-        
-        #tf.print("\n==================== Batch Training Info output:vanish Time ")
-        #tf.print("Loss:", loss, summarize=-1)
-        # predicted_times and y_batch are already 1D, so stack them directly
-        #combined_tensor = tf.stack([predicted_times, y_batch], axis=0)  # Shape: [2, batch_size]
-        #tf.print("Predicted & Actual times [Pred; Act]:\n", format_tensor(combined_tensor), summarize=-1)
-        #tf.print("============================================================")
-      
         return loss
 
+    # 验证步
     @tf.function
     def val_step(x_batch, y_batch, raw_batch):
-        # ResNet forward pass
         nn_output = model(x_batch, training=False)
-
-        # JAX simulation as a black-box function
         predicted_times = tf.py_function(
             func=lambda nn_out, raw: run_batch_simulation2(
-                nn_out, raw, param_bounds, num_types, columns=raw_columns_list,dt=dt
+                nn_out, raw, param_bounds, num_types, columns=raw_columns_list, dt=dt
             ),
             inp=[nn_output, raw_batch],
             Tout=tf.float32
         )
+        batch_size = tf.shape(y_batch)[0]
+        predicted_times = tf.reshape(predicted_times, [batch_size])
+        y_batch = tf.reshape(y_batch, [batch_size])
+        return predicted_times - y_batch
 
-        # 显式设置形状信息，帮助 TensorFlow 推断
-        # predicted_times 来自JAX函数，需要明确设置形状
-        batch_size = tf.shape(y_batch)[0]  # 获取批次大小
-        predicted_times = tf.reshape(predicted_times, [batch_size])  # Reshape to [batch_size]
-        y_batch = tf.reshape(y_batch, [batch_size])  # Reshape to [batch_size]
-
-        # Compute validation errors
-        errors = predicted_times - y_batch
-
-        return errors
-
+    # 主训练循环
     for epoch in range(args.epochs):
         logging.info(f"===== Epoch {epoch + 1}/{args.epochs} =====")
-        
         epoch_loss_avg = tf.keras.metrics.Mean()
-
-        # 统计batch总数
         total_batches = tf.data.experimental.cardinality(train_dataset).numpy()
         batch_idx = 0
+
         for x_batch, y_batch, raw_batch in train_dataset:
             batch_idx += 1
-            batch_start_time = time.time()
+            t0 = time.time()
             loss = train_step(x_batch, y_batch, raw_batch)
-            batch_end_time = time.time()
+            t1 = time.time()
             epoch_loss_avg.update_state(loss)
-            # Logging outside tf.function, where .numpy() is available
-            remaining_batches = total_batches - batch_idx
-            logging.info(f"Batch {batch_idx}/{total_batches}, Loss: {loss.numpy():.4f}, \
-                         Time: {batch_end_time - batch_start_time:.3f}s, Remaining: {remaining_batches}")
+            rem = total_batches - batch_idx
+            logging.info(f"Batch {batch_idx}/{total_batches} | Loss: {loss.numpy():.4f} | {t1-t0:.2f}s | Remain:{rem}")
 
-        
-        logging.info(f"Epoch {epoch+1} 训练完成, 平均损失: {epoch_loss_avg.result().numpy():.4f}")
+        logging.info(f"Epoch {epoch+1} Avg Loss: {epoch_loss_avg.result().numpy():.4f}")
 
-        # 每3个epoch进行一次验证
-        if epoch % 3 == 0 or epoch == args.epochs - 1:  # 在第0, 20, 40,...个epoch以及最后一个epoch验证
-            val_loss_avg = tf.keras.metrics.Mean()
-            total_val_batches = tf.data.experimental.cardinality(val_dataset).numpy()
-            val_batch_idx = 0
-            all_val_errors = []
-            for x_batch, y_batch, raw_batch in val_dataset:
-                val_batch_idx += 1
-                val_batch_start_time = time.time()
-                errors = val_step(x_batch, y_batch, raw_batch)
-                errors_np = errors.numpy()
-                all_val_errors.append(errors_np)
-                val_batch_end_time = time.time()
-                # 计算当前batch的损失
-                val_loss = np.mean(np.square(errors_np))
-                val_loss_avg.update_state(val_loss)
-                remaining_val_batches = total_val_batches - val_batch_idx
-                logging.info(f"{'_'*30}\nVal Batch {val_batch_idx}/{total_val_batches}, Loss: {val_loss:.4f}, \
-                             Time: {val_batch_end_time - val_batch_start_time:.3f}s, Remaining: {remaining_val_batches}")
+        # 验证
+        if epoch % 3 == 0 or epoch == args.epochs - 1:
+            val_errs = []
+            val_loss = tf.keras.metrics.Mean()
+            for xb, yb, rb in val_dataset:
+                errs = val_step(xb, yb, rb)
+                enp = errs.numpy()
+                val_errs.append(enp)
+                val_loss.update_state(np.mean(np.square(enp)))
 
-            val_errors = np.concatenate([arr.flatten() for arr in all_val_errors])
-            logging.info(f"Epoch {epoch+1} 验证完成 - 误差均值: {np.mean(val_errors):.4f}, RMSE: {np.sqrt(np.mean(np.square(val_errors))):.4f}")
-            logging.info(f"{'_'*30}")
+            val_errs = np.concatenate([e.flatten() for e in val_errs])
+            rmse = np.sqrt(np.mean(np.square(val_errs)))
+            mae = np.mean(np.abs(val_errs))
+            logging.info(f"Val RMSE: {rmse:.4f},Val Mae:{mae:.4f}")
+            np.save(f"./tmpModes/val_err_epoch_{epoch+1}.npy", val_errs)
 
-  
-            model_path = f"./tmpModes/model_epoch_{epoch+1}.h5"
-            model.save(model_path)
-            # Save validation errors
-            np.save(f"./tmpModes/validation_errors_epoch_{epoch+1}.npy", val_errors)
-            logging.info(f"模型已保存至 {model_path}")
-        else:
-            # 非验证epoch也保存模型，但不进行验证
-            model_path = f"./tmpModes/model_epoch_{epoch+1}.h5"
-            model.save(model_path)
-            logging.info(f"模型已保存至 {model_path}")
+        # 保存模型
+       # os.makedirs("./tmpModes", exist_ok=True)
+       # model.save(f"./tmpModes/model_epoch_{epoch+1}.h5")
+        logging.info(f"Model saved: model_epoch_{epoch+1}.h5")
+        force_clean_all_memory()
 
-    logging.info("训练全部完成!")
+    logging.info("✅ 训练完成！")
+    return model
+
+# ==============================================
+# 💎【代码块1结束
+# ==============================================
+
+
+# ==============================================
+# 💎【代码块2 】
+# 功能：mlp直接回归 模型构建 + 训练 + 验证 + 保存
+# ==============================================
+def train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt):
+    print("train_model2：mlp预测vanishTime 直接回归任务")
+    logging.info("启动 MLP 直接回归模型训练（预测消失时间）")
+   
+    # 构建回归模型，用于预测消失时间
+    output_dim_vanish = 1  # 回归任务，预测消失时间
+    model_vanish_reg = build_simple_resnet_regress(X_train.shape[1], output_dim_vanish, args.unit, args.layNum)
+
+    # 使用学习率调度器
+    initial_learning_rate = args.lr
+    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate,
+        decay_steps=100,  # 每100步衰减
+        decay_rate=0.99,  # 每次衰减到99%
+        staircase=True
+    )
+    optimizer = Adam(learning_rate=lr_schedule)
+    #optimizer = RMSprop(learning_rate=lr_schedule)
+
+    # 对于回归任务，使用均方误差损失函数
+    model_vanish_reg.compile(optimizer=optimizer, loss='mse', metrics=['mae'])
+
+    # 训练回归模型
+    model_vanish_reg.fit(train_dataset, validation_data=val_dataset, epochs=args.epochs, verbose=1)
+
+
     
-    # ==============================================
-    # 💎【代码块1】结束
-    # ==============================================
-  
+   # ===================== 1. 训练完成 → 评估训练集/验证集指标 =====================
+    print("\n" + "="*60)
+    print("模型最终评估指标")
+    print("="*60)
+
+    # 评估 训练集
+    train_loss, train_mae = model_vanish_reg.evaluate(train_dataset, verbose=0)
+    train_mse = train_loss  # MSE损失 = 损失值
+    train_rmse = np.sqrt(train_mse)
+
+    # 评估 验证集
+    val_loss, val_mae = model_vanish_reg.evaluate(val_dataset, verbose=0)
+    val_mse = val_loss
+    val_rmse = np.sqrt(val_mse)
+
+    # ===================== 6. 打印+日志输出指标 =====================
+    # 训练集结果
+    print(f"【训练集】 MAE: {train_mae:.4f} | MSE: {train_mse:.4f} | RMSE: {train_rmse:.4f}")
+    # 验证集结果
+    print(f"【验证集】 MAE: {val_mae:.4f} | MSE: {val_mse:.4f} | RMSE: {val_rmse:.4f}")
+    
+    logging.info(f"训练集评估 - MAE: {train_mae:.4f}, MSE: {train_mse:.4f}, RMSE: {train_rmse:.4f}")
+    logging.info(f"验证集评估 - MAE: {val_mae:.4f}, MSE: {val_mse:.4f}, RMSE: {val_rmse:.4f}")
+
+    # ===================== 7. 保存模型（可选） =====================
+    os.makedirs("./tmpModes", exist_ok=True)
+    model_path = "./tmpModes/mlp_regression_model.h5"
+    model_vanish_reg.save(model_path)
+    logging.info(f"回归模型已保存至: {model_path}")
+
+    logging.info("train_model2：mlp reg 训练完成！")
+    # 返回训练好的模型
+    return model_vanish_reg
+
+# ==============================================
+# 💎【代码块1结束
+# ==============================================
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="使用Keras和交通仿真进行端到端模型训练")
@@ -698,15 +784,11 @@ if __name__ == "__main__":
     parser.add_argument('--log_path', type=str, default='training_log.log', help='日志文件路径')
     parser.add_argument('--debug', action='store_true', help='启用Debug级别的日志信息')
     parser.add_argument('--dt', type=float, default=0.5, help='仿真时间步长')
-    parser.add_argument('--nC', type=float, default=100, help='Kmeans聚类数量，用于样本多样性选择')
+    parser.add_argument('--nC', type=int, default=100, help='Kmeans聚类数量，用于样本多样性选择')
+    parser.add_argument('--model', type=int, default=0, help='0(mlp+jax),1(mlp+regress)')
+    parser.add_argument('--fixdata', type=int, default=0, help='0(不修补),1(直接用原始数据修补),2(前后车+-5位置进行修补)')
     args = parser.parse_args()
     main(args)
 
 #python modelsCollect4.py --batch_size 16 --layNum 4
-#python modelsCollect6.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.0005 --unit 256 --layNum 16 --dt 0.1 --nC 500
-
-
-
-
-
-
+#python modelsCollect7.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.0005 --unit 256 --layNum 16 --dt 0.1 --nC 500 --model 0 --fixdata 2
