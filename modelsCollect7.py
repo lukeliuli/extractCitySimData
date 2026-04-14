@@ -31,7 +31,11 @@ import jax
 from tensorflow import keras
 import gc
 import jax.numpy as jnp
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 
+
+from jax.lib import xla_client
 def force_clean_all_memory():
     """硬核清理：JAX+Keras+系统内存，彻底释放无效占用"""
     # 1. 清理Keras计算图
@@ -40,8 +44,31 @@ def force_clean_all_memory():
     jnp.zeros((1,)).delete()
     # 4. 手动触发系统垃圾回收
     gc.collect()
+    gc.collect()  # 两次回收更彻底
+    
+    """
+    JAX 0.3.25 专属强制清理
+    清理：JAX缓存 + TensorFlow显存 + 系统内存
+    """
+ 
+    # 2. 清理TensorFlow显存（TF和JAX共用GPU，必须清！）
+    tf.keras.backend.clear_session()
+    tf.compat.v1.reset_default_graph()
 
-    print("✅ 已强制释放所有无效内存/显存")
+
+
+
+    try:
+        # 获取XLA客户端（GPU/CPU通用）
+        client = xla_client.get_local_client()
+        # 强制修剪内存：释放所有闲置缓存（核心！）
+        client.trim_memory(0)
+        print("✅ JAX XLA 底层缓存清理完成")
+    except Exception as e:
+        print("清理忽略:", e)
+        
+        
+        
     
 def format_tensor(tensor, decimals=1):
     """格式化张量到指定小数位数"""
@@ -225,13 +252,17 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         redlightpos_offset,\
         vanishtime_offset,\
         distgap_offset = scence_offset
-
-        redlighttime_offset = (-1.0+redlighttime_offset*2.0)*8.0
-        redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*150.0
-        vehpos_offset = (-4.0+vehpos_offset*8.0)*0.1
-        redlightpos_offset = redlightpos_offset*5
-        vanishtime_offset = (-1.0+vanishtime_offset*2.0)*1.0
-        distgap_offset = (-2.0+distgap_offset*4.0)*0.1
+        
+        #######################################################################
+        ###核心变换
+        #######################################################################
+        redlighttime_offset = (-1.0+redlighttime_offset*2.0)*1.0
+        redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*10
+        vehpos_offset = (-1.0+vehpos_offset*2.0)*0.1
+        redlightpos_offset = redlightpos_offset*1
+        #vanishtime_offset = (-1.0+vanishtime_offset*2.0)*1.0
+        vanishtime_offset = (-1.0+vanishtime_offset*2.0)*0.0 #结果变好的核心改变
+        distgap_offset = (-1.0+distgap_offset*2.0)*0.1
         scence_offset = redlighttime_offset,\
                             redlightpos2vanishpos_offset,\
                             vehpos_offset,\
@@ -250,7 +281,11 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         for i in range(20):
             pos_col = f'car_position_{i}'
             if pos_col in row_dict and row_dict[pos_col] != -1 and not jnp.isnan(row_dict[pos_col]):
-                car_indices.append((intersection_pos - row_dict[pos_col], i))
+                car_indices.append((intersection_pos - row_dict[pos_col], i))  
+                #######################################################################
+                ###核心变换，注意这里车辆位置为intersection_pos - row_dict[pos_col，而不是距离距离车道终点的位置
+                #######################################################################
+               
             else:
                 car_indices.append((intersection_pos - row_dict[pos_col]*random.randint(1000,2000), i))
                 # 对于缺失车辆，给它一个负的较远的距离，确保排序靠后，距离红绿灯较远
@@ -306,6 +341,7 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         return main_car_vanish_time#time_to_vanish计算时已经是秒了(step*0.1)
 
     results = jax.vmap(get_time_to_vanish2)(statesAll)
+    del statesAll, idm_params_arr, scaled_params0, real_params
     end_time = time.time()
     #tf.print(f"JAX SIM Batch sim time_to_vanish:\n {results}")
     tf.print(f"JAX SIM Batch simulation time (s): {end_time - start_time:.2f}")
@@ -347,7 +383,7 @@ def main(args):
 
     print(f"{'-'*100}")
     ## 生成数据，去掉车,其中df_missveh2，加入列df_missveh：['removed_vehicles'] = removed_vehicles_posi
-    df_missveh,queued_info,df_missveh2 = genSamplesByRandomRemovingVehicle(df1, remove_ratio=0.1)
+    df_missveh,queued_info,df_missveh2 = genSamplesByRandomRemovingVehicle(df1, remove_ratio=0.6)
     
     print('len(queued_vehicles_removed):',len(queued_info)) 
    
@@ -369,20 +405,27 @@ def main(args):
     print(f"{'-'*100}")   
     '''
     #调试结束
- 
+   
     X_train2, X_val2, y_train2, y_val2, \
         raw_train2, raw_val2, train_dataset2, val_dataset2, \
             raw_cols2 = genDatasetLost(df_missveh2, args.test_size, args.batch_size  )
-     
+
     df_step2_missveh2 = df_missveh2.copy()#df_missveh的['removed_vehicles']为None,df_missveh2['removed_vehicles']为具体删除车辆的信息位置和名称
     df_step2_missveh = df_missveh.copy()
-
+    
+    
+        
+        
+        
     
     # ==============================================
     # 🚕：第三步，将两部分数据合并，加入intersection_pos列，并随机抽样1000个样本，保证样本多样性
     # ==============================================
-    
-    df_all = pd.concat([df1, df_missveh2], ignore_index=True)
+    if args.lostjoin ==  1:
+        df_all = pd.concat([df1, df_missveh2], ignore_index=True)
+    else:
+        df_all = df1
+        
     lane_pos_map = {5: 53.05, 6: 53.13, 7: 53.30}
     df_all['intersection_pos'] = df_all['lane'].map(lane_pos_map)
     print(df_all.iloc[0])
@@ -424,7 +467,7 @@ def main(args):
 
     dt = args.dt
     logging.info(f"使用时间步长 dt={dt} 进行仿真。采样样本数为:{len(df)}")
-
+    
     # ==============================================
     # 🚕：第四步，处理是否修补数据
     # ==============================================
@@ -487,29 +530,30 @@ def main(args):
     if args.fixdata == 2:
         print('方法2修补数据,+—5前后车')
         lost_indices = df.index[df['lost'] == 1].tolist()
-        for idx in lost_indices:
-            car_positions1 = df.loc[idx, [c for c in df.columns if c.startswith('car_position_')]].values
-            car_speed1 = df.loc[idx, [c for c in df.columns if c.startswith('car_speed_')]].values
+        if len(lost_indices) >0:       
+            for idx in lost_indices:
+                car_positions1 = df.loc[idx, [c for c in df.columns if c.startswith('car_position_')]].values
+                car_speed1 = df.loc[idx, [c for c in df.columns if c.startswith('car_speed_')]].values
 
-            car_positions1 = [c for c in car_positions1 if c != -1]
-            car_speed1 =  [c for c in car_speed1 if c != -1]
-           
-            
-            removed_vehs = df.at[idx, 'removed_vehicles']#(丢失车辆命名,丢失车辆位置,车辆命名i的int值)
-            for i in range(len(removed_vehs)):
-                car_pos_col,car_pos,car_pos_i = removed_vehs[i]
-                car_positions1 = np.array(car_positions1)  
-                tmp = car_positions1-car_pos
-                
-                indexTmp = np.argmin(np.abs(tmp))
-                #车辆丢失的位置,前车+5，或者后车-5
-                if car_pos > car_positions1[indexTmp]:#car_pos样本中一般都是距离红灯距离
-                    car_pos_pTmp= car_positions1[indexTmp]+5.0
-                else:
-                    car_pos_pTmp= car_positions1[indexTmp]-5.0
-                
-                df.at[idx, f'car_position_{car_pos_i}'] = car_pos_pTmp#直接用最近车位置的+或者-代替
-                df.at[idx, f'car_speed_{car_pos_i}'] = car_speed1[indexTmp]#直接用最近车的速度代替
+                car_positions1 = [c for c in car_positions1 if c != -1]
+                car_speed1 =  [c for c in car_speed1 if c != -1]
+
+
+                removed_vehs = df.at[idx, 'removed_vehicles']#(丢失车辆命名,丢失车辆位置,车辆命名i的int值)
+                for i in range(len(removed_vehs)):
+                    car_pos_col,car_pos,car_pos_i = removed_vehs[i]
+                    car_positions1 = np.array(car_positions1)  
+                    tmp = car_positions1-car_pos
+
+                    indexTmp = np.argmin(np.abs(tmp))
+                    #车辆丢失的位置,前车+5，或者后车-5
+                    if car_pos > car_positions1[indexTmp]:#car_pos样本中一般都是距离红灯距离
+                        car_pos_pTmp= car_positions1[indexTmp]+5.0
+                    else:
+                        car_pos_pTmp= car_positions1[indexTmp]-5.0
+
+                    df.at[idx, f'car_position_{car_pos_i}'] = car_pos_pTmp#直接用最近车位置的+或者-代替
+                    df.at[idx, f'car_speed_{car_pos_i}'] = car_speed1[indexTmp]#直接用最近车的速度代替
         
 
         
@@ -519,8 +563,7 @@ def main(args):
                 
 
     df_step4_lostfilled = df.copy()
-    print(lost_indices[0])
-    print(df.iloc[lost_indices[0]])
+
     #第四步，处理缺失数据，补车。缺失数据修改end-----------------------------------------------------------------------------------------------
     
     
@@ -636,6 +679,7 @@ def train_model(X_train, y_train, raw_train, train_dataset, val_dataset, raw_col
         grads = tape.gradient(loss, model.trainable_variables)
         clipped_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in grads]
         optimizer.apply_gradients(zip(clipped_grads, model.trainable_variables))
+        del nn_output, predicted_times, grads, clipped_grads
         return loss
 
     # 验证步
@@ -686,7 +730,7 @@ def train_model(X_train, y_train, raw_train, train_dataset, val_dataset, raw_col
             rmse = np.sqrt(np.mean(np.square(val_errs)))
             mae = np.mean(np.abs(val_errs))
             logging.info(f"Val RMSE: {rmse:.4f},Val Mae:{mae:.4f}")
-            np.save(f"./tmpModes/val_err_epoch_{epoch+1}.npy", val_errs)
+            #np.save(f"./tmpModes/val_err_epoch_{epoch+1}.npy", val_errs)
 
         # 保存模型
        # os.makedirs("./tmpModes", exist_ok=True)
@@ -787,8 +831,9 @@ if __name__ == "__main__":
     parser.add_argument('--nC', type=int, default=100, help='Kmeans聚类数量，用于样本多样性选择')
     parser.add_argument('--model', type=int, default=0, help='0(mlp+jax),1(mlp+regress)')
     parser.add_argument('--fixdata', type=int, default=0, help='0(不修补),1(直接用原始数据修补),2(前后车+-5位置进行修补)')
+    parser.add_argument('--lostjoin', type=int, default=0, help='0(模型不加lost),1(模型加lost)')
     args = parser.parse_args()
     main(args)
 
 #python modelsCollect4.py --batch_size 16 --layNum 4
-#python modelsCollect7.py --batch_size 32 --test_size 0.5 --epochs 100 --lr 0.0005 --unit 256 --layNum 16 --dt 0.1 --nC 500 --model 0 --fixdata 2
+#c

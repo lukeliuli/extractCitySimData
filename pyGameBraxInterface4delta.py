@@ -128,8 +128,12 @@ def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
     
     N = num_vehicles
     p = state.params
-
+    #车辆位置在这里为距离车道开始的距离，不是距离终点距离
+    #-state.position 按升序，就是 idx =state.position从大到小排量，从排头到排尾部
+    #核心代码，在run_batch_simulation2:car_indices.append((intersection_pos - row_dict[pos_col], i))  
     idx = jnp.argsort(-state.position)
+    
+  
     pos = state.position[idx]
     vel = state.velocity[idx]
     acc = state.acceleration[idx]
@@ -139,18 +143,19 @@ def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
         v0=p.v0[idx], T=p.T[idx], s0=p.s0[idx], a=p.a[idx], b=p.b[idx],
         delta=p.delta[idx], length=p.length[idx], rtime=p.rtime[idx]
     )
-    inv_idx = jnp.argsort(idx)
+    inv_idx = jnp.argsort(idx) #把idx变换后的位置变回来
+    
     front_car_id_sorted = jnp.full((len(idx),), -1, dtype=jnp.int32)
     front_car_id_sorted = front_car_id_sorted.at[1:].set(idx[:-1])
     front_car_id = jnp.empty_like(front_car_id_sorted)
-    front_car_id = front_car_id.at[inv_idx].set(front_car_id_sorted)
+    front_car_id = front_car_id.at[inv_idx].set(front_car_id_sorted)#state.position 的idx
 
     red_light_arr = jnp.ones_like(pos) * state.red_light_pos
     near_red = (red_light_arr - pos) < vel * 3.0
     near_red2 = (red_light_arr - pos) < 30
     not_passed_red = pos < state.red_light_pos
     near_red2 = near_red2 | near_red2
-    stop_mask = near_red2 & not_passed_red & state.red_light_state
+    stop_mask = near_red2 & not_passed_red & state.red_light_state #红灯附近
     tgt = jnp.where(stop_mask, state.red_light_pos, tgt)
 
     pos_front = jnp.concatenate([jnp.array([1e9]), pos[0:-1]])
@@ -198,7 +203,7 @@ def step_pure(state: EnvState, num_vehicles: int, dt: float) -> EnvState:
     
 
     prev_time_to_vanish = state.time_to_vanish
-    vanish_pos = state.red_light_pos+state.redlightpos2vanishpos_offset
+    vanish_pos = state.red_light_pos+state.redlightpos2vanishpos_offset#核心
     passed_mask = (state.position < vanish_pos) & (new_pos[inv_idx] >= vanish_pos)
 
     #注意这里乘以0.1了,以及这里的-4，人工调整，无理由，以后要改！！！
