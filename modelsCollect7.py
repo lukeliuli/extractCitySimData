@@ -256,13 +256,13 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         #######################################################################
         ###核心变换
         #######################################################################
-        redlighttime_offset = (-1.0+redlighttime_offset*2.0)*1.0
-        redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*10
-        vehpos_offset = (-1.0+vehpos_offset*2.0)*0.1
+        redlighttime_offset = (-1.0+redlighttime_offset*2.0)*3.0
+        redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*15
+        vehpos_offset = (-1.0+vehpos_offset*2.0)*0.3
         redlightpos_offset = redlightpos_offset*1
         #vanishtime_offset = (-1.0+vanishtime_offset*2.0)*1.0
-        vanishtime_offset = (-1.0+vanishtime_offset*2.0)*0.0 #结果变好的核心改变
-        distgap_offset = (-1.0+distgap_offset*2.0)*0.1
+        vanishtime_offset = (-1.0+vanishtime_offset*2.0)*1.0 #结果变好的核心改变
+        distgap_offset = (-1.0+distgap_offset*2.0)*0.3
         scence_offset = redlighttime_offset,\
                             redlightpos2vanishpos_offset,\
                             vehpos_offset,\
@@ -271,7 +271,7 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
                             distgap_offset
         
         def insert_constants(params):
-            return jnp.concatenate([params[:5], jnp.array([4.0, 5.0]), params[5:]])
+            return jnp.concatenate([params[:5], jnp.array([4.0, 4.0]), params[5:]])
         idm_params_arr = jnp.stack([insert_constants(real_params[i]) for i in range(num_types)])
         #tf.print(batch_size,i,"IDM Params for types:\n", idm_params_arr)
         # 解析raw_data
