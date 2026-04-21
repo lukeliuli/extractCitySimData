@@ -110,7 +110,7 @@ def setup_logger(log_path, debug=False):
     #delta: float
     #length: float
     #rtime: float
-
+#############################################################################################核心变量
 def get_param_bounds(num_types):
     """根据类别数量生成参数边界"""
     # [v0, T, s0, a, b, rtime]
@@ -177,7 +177,60 @@ def build_simple_resnet(input_dim, output_dim, unit=256, layNum=8):
     model = Model(inputs=inp, outputs=out)
     return model
 
-##回归模型
+# 2. Keras 模型定义 (优化)
+def build_simple_resnet2(input_dim, output_dim, unit=256, layNum=8):
+    """构建一个优化的ResNet模型，调整了BN和ReLU的位置"""
+    """
+    优化版 ResNet 回归模型
+    改进点：
+    1. 加入 Dropout 防止过拟合
+    2. 优化残差块结构（Pre-Activation，训练更稳）
+    3. 降低神经元 + 减少层数，适配小数据集
+    4. 每一层都做归一化 + 正则化
+    """
+
+    def resnet_block(x, units, dropout_rate=0.2):
+        shortcut = x
+
+        # 🔥 优化版残差块（BN -> ReLU -> Dense，训练更稳定）
+        y = BatchNormalization()(x)
+        y = ReLU()(y)
+        y = Dense(units, kernel_initializer='he_normal')(y)
+        
+        # ✅ 加入 Dropout，核心防过拟合
+        y = Dropout(dropout_rate)(y)
+
+        y = BatchNormalization()(y)
+        y = ReLU()(y)
+        y = Dense(units, kernel_initializer='he_normal')(y)
+        y = Dropout(dropout_rate)(y)
+
+        # 维度匹配
+        if shortcut.shape[-1] != units:
+            shortcut = Dense(units)(shortcut)
+
+        # 残差连接
+        y = Add()([shortcut, y])
+        return y
+
+    # 输入层
+    inp = Input(shape=(input_dim,))
+    
+    # 初始层
+    x = Dense(unit, kernel_initializer='he_normal')(inp)
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+    #x = Dropout(0.2)(x)  # 初始层也加 Dropout
+
+    # 残差层（层数减少，防止过拟合）
+    for _ in range(layNum):
+        x = resnet_block(x, unit, dropout_rate=0.2)
+
+    # 输出层使用sigmoid激活，将输出限制在(0, 1)范围，便于后续缩放
+    out = Dense(output_dim, activation='sigmoid')(x)
+    model = Model(inputs=inp, outputs=out)
+    return model
+##回归模型1
 def build_simple_resnet_regress(input_dim, output_dim, unit=256, layNum=8):
 
 
@@ -217,8 +270,67 @@ def build_simple_resnet_regress(input_dim, output_dim, unit=256, layNum=8):
     model = Model(inputs=inp, outputs=out)
     return model
 
+###############################################################################
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Dense, BatchNormalization, ReLU, Add, Dropout
 
-def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_types, columns=None,dt=0.5):
+def build_simple_resnet_regress2(input_dim, output_dim, unit=128, layNum=4):
+    """
+    优化版 ResNet 回归模型
+    改进点：
+    1. 加入 Dropout 防止过拟合
+    2. 优化残差块结构（Pre-Activation，训练更稳）
+    3. 降低神经元 + 减少层数，适配小数据集
+    4. 每一层都做归一化 + 正则化
+    """
+
+    def resnet_block(x, units, dropout_rate=0.2):
+        shortcut = x
+
+        # 🔥 优化版残差块（BN -> ReLU -> Dense，训练更稳定）
+        y = BatchNormalization()(x)
+        y = ReLU()(y)
+        y = Dense(units, kernel_initializer='he_normal')(y)
+        
+        # ✅ 加入 Dropout，核心防过拟合
+        y = Dropout(dropout_rate)(y)
+
+        y = BatchNormalization()(y)
+        y = ReLU()(y)
+        y = Dense(units, kernel_initializer='he_normal')(y)
+        y = Dropout(dropout_rate)(y)
+
+        # 维度匹配
+        if shortcut.shape[-1] != units:
+            shortcut = Dense(units)(shortcut)
+
+        # 残差连接
+        y = Add()([shortcut, y])
+        return y
+
+    # 输入层
+    inp = Input(shape=(input_dim,))
+    
+    # 初始层
+    x = Dense(unit, kernel_initializer='he_normal')(inp)
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+    #x = Dropout(0.2)(x)  # 初始层也加 Dropout
+
+    # 残差层（层数减少，防止过拟合）
+    for _ in range(layNum):
+        x = resnet_block(x, unit, dropout_rate=0.2)
+
+    # 输出层（回归任务）
+    out = Dense(1, activation='linear', name='vanish_time')(x)
+
+    model = Model(inputs=inp, outputs=out)
+    return model
+
+
+
+
+def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_types, columns=None,dt=0.5,args=None):
     """
     JAX纯函数版本，适用于vmap批量仿真。输入为单个样本，输出主车time_to_vanish。
     nn_output: (num_types*6,)
@@ -254,15 +366,25 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         distgap_offset = scence_offset
         
         #######################################################################
-        ###核心变换
+        ################################################################################################核心变换
         #######################################################################
-        redlighttime_offset = (-1.0+redlighttime_offset*2.0)*3.0
-        redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*15
-        vehpos_offset = (-1.0+vehpos_offset*2.0)*0.3
-        redlightpos_offset = redlightpos_offset*1
-        #vanishtime_offset = (-1.0+vanishtime_offset*2.0)*1.0
-        vanishtime_offset = (-1.0+vanishtime_offset*2.0)*1.0 #结果变好的核心改变
-        distgap_offset = (-1.0+distgap_offset*2.0)*0.3
+        if args.goffset == 1:
+            redlighttime_offset = (-1.0+redlighttime_offset*2.0)*1.0
+            redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*20
+            vehpos_offset = (-1.0+vehpos_offset*2.0)*0.1
+            redlightpos_offset = redlightpos_offset*1
+            #vanishtime_offset = (-1.0+vanishtime_offset*2.0)*1.0
+            vanishtime_offset = (-1.0+vanishtime_offset*2.0)*0.5 #结果变好的核心改变
+            distgap_offset = (-1.0+distgap_offset*2.0)*0.1
+        else:
+            redlighttime_offset = (-1.0+redlighttime_offset*2.0)*0.0
+            redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*0
+            vehpos_offset = (-1.0+vehpos_offset*2.0)*0
+            redlightpos_offset = redlightpos_offset*0
+            #vanishtime_offset = (-1.0+vanishtime_offset*2.0)*0.0
+            vanishtime_offset = (-1.0+vanishtime_offset*2.0)*0.0 #结果变好的核心改变
+            distgap_offset = (-1.0+distgap_offset*2.0)*0
+            
         scence_offset = redlighttime_offset,\
                             redlightpos2vanishpos_offset,\
                             vehpos_offset,\
@@ -421,10 +543,22 @@ def main(args):
     # ==============================================
     # 🚕：第三步，将两部分数据合并，加入intersection_pos列，并随机抽样1000个样本，保证样本多样性
     # ==============================================
-    if args.lostjoin ==  1:
-        df_all = pd.concat([df1, df_missveh2], ignore_index=True)
-    else:
-        df_all = df1
+    #parser.add_argument('--trainvalMode', type=int, default=0, help='0(训练验证都无丢失),1(训练验证都有丢失)')
+    #df_step1,df_step2_missveh2
+    if args.trainvalmode == 0:
+         df_all = df1
+    if args.trainvalmode == 1:
+         df_all = pd.concat([df1, df_missveh2], ignore_index=True)
+            
+  
+            
+   
+
+
+
+            
+    
+        
         
     lane_pos_map = {5: 53.05, 6: 53.13, 7: 53.30}
     df_all['intersection_pos'] = df_all['lane'].map(lane_pos_map)
@@ -464,6 +598,9 @@ def main(args):
     df_step3_allSampled = df.copy()
 
     
+    if args.trainvalmode == 3:
+        df_all = pd.concat([df1, df_missveh2], ignore_index=True)
+       
 
     dt = args.dt
     logging.info(f"使用时间步长 dt={dt} 进行仿真。采样样本数为:{len(df)}")
@@ -567,6 +704,8 @@ def main(args):
     #第四步，处理缺失数据，补车。缺失数据修改end-----------------------------------------------------------------------------------------------
     
     
+    
+    
     # ==============================================
     # 🚕：第五步，开始处理数据，准备训练数据集和验证数据集
     # ==============================================
@@ -580,8 +719,6 @@ def main(args):
     raw_cols_set.add('lane')
     raw_cols_set.add('intersection_pos')
     raw_cols_set.add('main_car_position')
-
-    
     raw_cols = sorted(list(raw_cols_set)) # 排序以保证列顺序一致
 
     X = df[feature_cols].values.astype(np.float32)
@@ -591,6 +728,10 @@ def main(args):
     X_train, X_val, y_train, y_val, raw_train, raw_val = train_test_split(
         X, y, raw_data_for_sim, test_size=args.test_size, random_state=42
     )
+    
+    
+
+
    
     # ==============================================
     # 💎 # 功能：mlp+cf参数+全局参数 模型构建 + 训练 + 验证 + 保存，注意需要1,2,3,4,5步，
@@ -638,7 +779,6 @@ def main(args):
 
 
 
-
 # ==============================================
 # 💎【代码块1 已封装成独立函数】
 # 功能：mlp+cf参数+全局参数 模型构建 + 训练 + 验证 + 保存
@@ -649,7 +789,7 @@ def train_model(X_train, y_train, raw_train, train_dataset, val_dataset, raw_col
     output_dim = num_types2 * 6
 
     # 构建模型
-    model = build_simple_resnet(X_train.shape[1], output_dim, args.unit, args.layNum)
+    model = build_simple_resnet2(X_train.shape[1], output_dim, args.unit, args.layNum)
     param_bounds = get_param_bounds(num_types)
     raw_columns_list = raw_cols
 
@@ -666,7 +806,7 @@ def train_model(X_train, y_train, raw_train, train_dataset, val_dataset, raw_col
             nn_output = model(x_batch, training=True)
             predicted_times = tf.py_function(
                 func=lambda nn_out, raw: run_batch_simulation2(
-                    nn_out, raw, param_bounds, num_types, columns=raw_columns_list, dt=dt
+                    nn_out, raw, param_bounds, num_types, columns=raw_columns_list, dt=dt,args=args
                 ),
                 inp=[nn_output, raw_batch],
                 Tout=tf.float32
@@ -688,7 +828,7 @@ def train_model(X_train, y_train, raw_train, train_dataset, val_dataset, raw_col
         nn_output = model(x_batch, training=False)
         predicted_times = tf.py_function(
             func=lambda nn_out, raw: run_batch_simulation2(
-                nn_out, raw, param_bounds, num_types, columns=raw_columns_list, dt=dt
+                nn_out, raw, param_bounds, num_types, columns=raw_columns_list, dt=dt,args=args
             ),
             inp=[nn_output, raw_batch],
             Tout=tf.float32
@@ -750,13 +890,17 @@ def train_model(X_train, y_train, raw_train, train_dataset, val_dataset, raw_col
 # 💎【代码块2 】
 # 功能：mlp直接回归 模型构建 + 训练 + 验证 + 保存
 # ==============================================
+from tensorflow.keras.callbacks import EarlyStopping
+def rmse(y_true, y_pred):
+    return tf.sqrt(tf.reduce_mean(tf.square(y_true - y_pred)))
+
 def train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt):
     print("train_model2：mlp预测vanishTime 直接回归任务")
     logging.info("启动 MLP 直接回归模型训练（预测消失时间）")
    
     # 构建回归模型，用于预测消失时间
     output_dim_vanish = 1  # 回归任务，预测消失时间
-    model_vanish_reg = build_simple_resnet_regress(X_train.shape[1], output_dim_vanish, args.unit, args.layNum)
+    model_vanish_reg = build_simple_resnet_regress2(X_train.shape[1], output_dim_vanish, args.unit, args.layNum)
 
     # 使用学习率调度器
     initial_learning_rate = args.lr
@@ -770,10 +914,27 @@ def train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_co
     #optimizer = RMSprop(learning_rate=lr_schedule)
 
     # 对于回归任务，使用均方误差损失函数
-    model_vanish_reg.compile(optimizer=optimizer, loss='mse', metrics=['mae'])
+    model_vanish_reg.compile(optimizer=optimizer, loss='mse', metrics=['mae',rmse])
+    
+    
+    early_stop = EarlyStopping(
+            monitor='val_loss',
+            patience=30,
+            restore_best_weights=True,
+            verbose=1
+        )
+      #model.fit(
+      #  X_train, y_train,
+      #  validation_data=(X_val, y_val),
+      #  epochs=150,
+      #  batch_size=8,
+      #  callbacks=[early_stop],  # 加上这个
+      #  shuffle=True
+            #)
+  
 
     # 训练回归模型
-    model_vanish_reg.fit(train_dataset, validation_data=val_dataset, epochs=args.epochs, verbose=1)
+    model_vanish_reg.fit(train_dataset, validation_data=val_dataset, epochs=args.epochs,verbose=1,callbacks=[early_stop])
 
 
     
@@ -783,14 +944,13 @@ def train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_co
     print("="*60)
 
     # 评估 训练集
-    train_loss, train_mae = model_vanish_reg.evaluate(train_dataset, verbose=0)
+    train_loss, train_mae,train_rmse = model_vanish_reg.evaluate(train_dataset, verbose=0)
     train_mse = train_loss  # MSE损失 = 损失值
-    train_rmse = np.sqrt(train_mse)
-
+    
     # 评估 验证集
-    val_loss, val_mae = model_vanish_reg.evaluate(val_dataset, verbose=0)
+    val_loss, val_mae,val_rmse = model_vanish_reg.evaluate(val_dataset, verbose=0)
     val_mse = val_loss
-    val_rmse = np.sqrt(val_mse)
+   
 
     # ===================== 6. 打印+日志输出指标 =====================
     # 训练集结果
@@ -831,9 +991,11 @@ if __name__ == "__main__":
     parser.add_argument('--nC', type=int, default=100, help='Kmeans聚类数量，用于样本多样性选择')
     parser.add_argument('--model', type=int, default=0, help='0(mlp+jax),1(mlp+regress)')
     parser.add_argument('--fixdata', type=int, default=0, help='0(不修补),1(直接用原始数据修补),2(前后车+-5位置进行修补)')
-    parser.add_argument('--lostjoin', type=int, default=0, help='0(模型不加lost),1(模型加lost)')
+    parser.add_argument('--goffset', type=int, default=1, help='0(jax模型中全局偏移参数为0),1(jax模型中全局偏移参数为1，默认1)')
+    parser.add_argument('--trainvalmode', type=int, default=0, help='0(训练验证都无丢失),1(训练验证都有丢失)')
     args = parser.parse_args()
     main(args)
 
 #python modelsCollect4.py --batch_size 16 --layNum 4
-#c
+#python modelsCollect7.py --batch_size 32 --test_size 0.5 --epochs 150 --lr 0.00005 --unit 256 --layNum 16 --dt 0.1 --nC 500 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1
+#mae3.8
