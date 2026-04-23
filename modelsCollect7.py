@@ -15,7 +15,7 @@ import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Dense, BatchNormalization, ReLU, Add
 from tensorflow.keras.optimizers import Adam,Adadelta,SGD,Adamax, RMSprop
-from tensorflow.keras.callbacks import ReduceLROnPlateau
+
 from sklearn.model_selection import train_test_split
 import jax
 import jax.numpy as jnp
@@ -31,8 +31,8 @@ import jax
 from tensorflow import keras
 import gc
 import jax.numpy as jnp
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+from tensorflow.keras.mixed_precision import set_global_policy
+set_global_policy('mixed_float16')
 
 
 from jax.lib import xla_client
@@ -559,23 +559,35 @@ def main(args):
     if len(df) > numSamples:
         # 先用KMeans聚类，保证多样性
         sample_features = df[[c for c in df.columns if 'car_position_' in c or 'car_speed_' in c]].values
-        n_clusters = min(100, len(df) // 10)
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        n_clusters = min(200, len(df) // 10)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=30)
         cluster_labels = kmeans.fit_predict(sample_features)
         sampled_indices = []
+
+        #1/4KMeans聚类抽样，3/4lost加权抽样
         for cluster in range(n_clusters):
             cluster_idx = np.where(cluster_labels == cluster)[0]
             if len(cluster_idx) > 0:
                 # 每个簇随机采样一定数量
-                n = max(1, int(numSamples / n_clusters))
+                n = max(1, int(numSamples/4/ n_clusters))
                 chosen = np.random.choice(cluster_idx, size=min(n, len(cluster_idx)), replace=False)
                 sampled_indices.extend(chosen)
-        # 如果不足numSamples个，再随机补齐
+        sampleKeamNum = len(sampled_indices)
+        # 如果不足numSamples个，再基于 lost 加权概率补齐（偏重 lost 值大的样本）
         if len(sampled_indices) < numSamples:
             remaining = list(set(range(len(df))) - set(sampled_indices))
-            extra = np.random.choice(remaining, size=numSamples - len(sampled_indices), replace=False)
-            sampled_indices.extend(extra)
+            if len(remaining) > 0:
+                oversample_factor = 5.0
+                lost_rem = df['lost'].iloc[remaining].fillna(0).astype(float).values
+                weights_rem = 1.0 + lost_rem * oversample_factor
+                probs_rem = weights_rem / np.sum(weights_rem)
+                
+                extra = list(np.random.choice(remaining, size=(numSamples - len(sampled_indices)), replace=False, p=probs_rem))
+               
+                sampled_indices.extend(extra)
+        
         sampled_indices = np.array(sampled_indices[:numSamples])  # 最终保留numSamples个样本
+        sampleLostWProNum = len(sampled_indices) - sampleKeamNum
         df = df.iloc[sampled_indices].reset_index(drop=True)
     else:
         df = df.sample(frac=1, random_state=42).reset_index(drop=True)
@@ -583,7 +595,9 @@ def main(args):
 
     df_step3_all = df_all.copy()
     df_step3_allSampled = df.copy()
-
+    logging.info(f"抽样样本数: {len(sampled_indices)}.KMeans聚类抽样了{sampleKeamNum}个样本,lost加权抽样补充了{sampleLostWProNum}个样本。")
+    
+    
     
     if args.trainvalmode == 3:
         df_all = pd.concat([df1, df_missveh2], ignore_index=True)
@@ -759,6 +773,8 @@ def main(args):
         logging.info(f"数据准备完成: X_train.shape:{X_train.shape}, y_train.shape:{y_train.shape}")
         logging.info(f"数据准备完成: X_val.shape:{X_val.shape}, y_val.shape:{y_val.shape}")
         #mlp+regress参数+全局参数 模型构建 + 训练 + 验证 + 保存
+        train_dataset = train_dataset.cache() 
+        train_dataset = train_dataset.cache() 
         train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt, raw_val=raw_val)
   
 
@@ -1080,7 +1096,7 @@ if __name__ == "__main__":
     parser.add_argument('--log_path', type=str, default='training_log.log', help='日志文件路径')
     parser.add_argument('--debug', action='store_true', help='启用Debug级别的日志信息')
     parser.add_argument('--dt', type=float, default=0.5, help='仿真时间步长')
-    parser.add_argument('--nC', type=int, default=100, help='Kmeans聚类数量，用于样本多样性选择')
+    parser.add_argument('--nC', type=int, default=1000, help='Kmeans聚类数量，用于样本多样性选择')
     parser.add_argument('--model', type=int, default=0, help='0(mlp+jax),1(mlp+regress)')
     parser.add_argument('--fixdata', type=int, default=0, help='0(不修补),1(直接用原始数据修补),2(前后车+-5位置进行修补)')
     parser.add_argument('--goffset', type=int, default=1, help='0(jax模型中全局偏移参数为0),1(jax模型中全局偏移参数为1，默认1)')
