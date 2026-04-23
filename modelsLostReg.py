@@ -192,7 +192,7 @@ def genSamplesByRandomRemovingVehicle(df, remove_ratio=0.1):
                 car_posi = int(pos_col.replace('car_position_', ''))
                 positions.append((pos_col,pos_val,car_posi))#pos_col i命名,pos_val是位置值，car_posi是车辆命名转为 int
 
-        # 按位置排序（距离交叉口近的在前），position是当前row的车辆位置值，包括pos,car_posi
+        # 按位置排序（位置越大，距离交叉口越近，越在前。注意现在距离还是位置不是距离路口文职），position是当前row的车辆位置值，包括pos,car_posi
         positions.sort(key=lambda x: x[1],reverse=True)
         positions0 = positions.copy()
         # 获取主车位置（目标车）
@@ -239,7 +239,7 @@ def genSamplesByRandomRemovingVehicle(df, remove_ratio=0.1):
                 row[pos_col] = -1 #真删除 修改当前row的car_position_i和car_speed_i为-1
                 car_speed_col = pos_col.replace('car_position_', 'car_speed_')
                 row[car_speed_col] = -1 #
-
+            row['lost'] = removed_counter
         #----------------------------------------------------------------------------------
         #C.无论移除还是没有移除，都appeend当前row到removed_rows中，后续会构建一个新的DataFrame df_missveh    
         

@@ -55,20 +55,7 @@ def force_clean_all_memory():
     tf.keras.backend.clear_session()
     tf.compat.v1.reset_default_graph()
 
-
-
-
-    try:
-        # 获取XLA客户端（GPU/CPU通用）
-        client = xla_client.get_local_client()
-        # 强制修剪内存：释放所有闲置缓存（核心！）
-        client.trim_memory(0)
-        print("✅ JAX XLA 底层缓存清理完成")
-    except Exception as e:
-        print("清理忽略:", e)
-        
-        
-        
+       
     
 def format_tensor(tensor, decimals=1):
     """格式化张量到指定小数位数"""
@@ -189,7 +176,7 @@ def build_simple_resnet2(input_dim, output_dim, unit=256, layNum=8):
     4. 每一层都做归一化 + 正则化
     """
 
-    def resnet_block(x, units, dropout_rate=0.2):
+    def resnet_block(x, units, dropout_rate=0):
         shortcut = x
 
         # 🔥 优化版残差块（BN -> ReLU -> Dense，训练更稳定）
@@ -350,7 +337,7 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         raw_data = raw_data_batch[i].numpy()
     
         # 1. 参数解码numType =4+1;4为4类IDM参数，1为全局偏移量
-        scaled_params0 = jnp.asarray(nn_output).reshape((5, 6))
+        scaled_params0 = jnp.asarray(nn_output).reshape((num_types+1, 6))
         scaled_params = scaled_params0[:-1, :]  # 去掉最后一行全局偏移量
         param_bounds = jnp.asarray(param_bounds)
         low = param_bounds[:, :, 0]
@@ -369,13 +356,13 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
         ################################################################################################核心变换
         #######################################################################
         if args.goffset == 1:
-            redlighttime_offset = (-1.0+redlighttime_offset*2.0)*1.0
+            redlighttime_offset = (-1.0+redlighttime_offset*2.0)*2.0
             redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*20
-            vehpos_offset = (-1.0+vehpos_offset*2.0)*0.1
-            redlightpos_offset = redlightpos_offset*1
+            vehpos_offset = (-1.0+vehpos_offset*2.0)*1
+            redlightpos_offset = redlightpos_offset*2
             #vanishtime_offset = (-1.0+vanishtime_offset*2.0)*1.0
             vanishtime_offset = (-1.0+vanishtime_offset*2.0)*0.5 #结果变好的核心改变
-            distgap_offset = (-1.0+distgap_offset*2.0)*0.1
+            distgap_offset = (-1.0+distgap_offset*2.0)*1
         else:
             redlighttime_offset = (-1.0+redlighttime_offset*2.0)*0.0
             redlightpos2vanishpos_offset = redlightpos2vanishpos_offset*0
@@ -568,7 +555,7 @@ def main(args):
     # 随机提取args.nC个样本，尽可能保证样本多样性
     df = df_all.copy()
     numSamples = args.nC
-    
+    print(f"原始数据样本数: {len(df)}，准备随机抽样 {numSamples} 个样本进行训练和验证...")
     if len(df) > numSamples:
         # 先用KMeans聚类，保证多样性
         sample_features = df[[c for c in df.columns if 'car_position_' in c or 'car_speed_' in c]].values
@@ -583,12 +570,12 @@ def main(args):
                 n = max(1, int(numSamples / n_clusters))
                 chosen = np.random.choice(cluster_idx, size=min(n, len(cluster_idx)), replace=False)
                 sampled_indices.extend(chosen)
-        # 如果不足1000个，再随机补齐
+        # 如果不足numSamples个，再随机补齐
         if len(sampled_indices) < numSamples:
             remaining = list(set(range(len(df))) - set(sampled_indices))
-            extra = np.random.choice(remaining, size=1000 - len(sampled_indices), replace=False)
+            extra = np.random.choice(remaining, size=numSamples - len(sampled_indices), replace=False)
             sampled_indices.extend(extra)
-        sampled_indices = np.array(sampled_indices[:1000])
+        sampled_indices = np.array(sampled_indices[:numSamples])  # 最终保留numSamples个样本
         df = df.iloc[sampled_indices].reset_index(drop=True)
     else:
         df = df.sample(frac=1, random_state=42).reset_index(drop=True)
@@ -719,6 +706,7 @@ def main(args):
     raw_cols_set.add('lane')
     raw_cols_set.add('intersection_pos')
     raw_cols_set.add('main_car_position')
+    raw_cols_set.add('lost')
     raw_cols = sorted(list(raw_cols_set)) # 排序以保证列顺序一致
 
     X = df[feature_cols].values.astype(np.float32)
@@ -770,8 +758,8 @@ def main(args):
         logging.info(f"数据准备完成: {len(X_train)} 训练样本, {len(X_val)} 验证样本")
         logging.info(f"数据准备完成: X_train.shape:{X_train.shape}, y_train.shape:{y_train.shape}")
         logging.info(f"数据准备完成: X_val.shape:{X_val.shape}, y_val.shape:{y_val.shape}")
-        #mlp+cf参数+全局参数 模型构建 + 训练 + 验证 + 保存
-        train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt)
+        #mlp+regress参数+全局参数 模型构建 + 训练 + 验证 + 保存
+        train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt, raw_val=raw_val)
   
 
 
@@ -792,6 +780,9 @@ def train_model(X_train, y_train, raw_train, train_dataset, val_dataset, raw_col
     model = build_simple_resnet2(X_train.shape[1], output_dim, args.unit, args.layNum)
     param_bounds = get_param_bounds(num_types)
     raw_columns_list = raw_cols
+
+    # 为后续按丢失车辆数分组评估，确定 'lost' 在 raw_columns_list 中的索引（若不存在则为 None）
+    idx_lost = raw_columns_list.index('lost') if 'lost' in raw_columns_list else None
 
     # 学习率调度器
     lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
@@ -879,6 +870,62 @@ def train_model(X_train, y_train, raw_train, train_dataset, val_dataset, raw_col
         force_clean_all_memory()
 
     logging.info("✅ 训练完成！")
+
+    # =================
+    # 功能：对验证集中按缺失车辆数（0,1,2,3,4+）进行单独评估，看看模型在不同丢失程度上的表现
+    # df['lost'] 代表丢失车辆数量，df['removed_vehicles'] 代表丢失车辆的信息（位置和命名）
+    # ================
+   
+
+    # buckets: 0,1,2,3 表示 3 表示 3+辆丢失
+    buckets = {0: [], 1: [], 2: [], 3: []}
+    # 为最终的按丢失车辆分组评估重置错误收集器，
+    # 避免之前训练/验证阶段将 `val_errs` 设为 numpy 数组后再次调用 `.append` 抛错
+    val_errs = []
+    val_loss = tf.keras.metrics.Mean()
+
+    for xb, yb, rb in val_dataset:
+        errs = val_step(xb, yb, rb)
+        enp = errs.numpy().flatten()
+        val_errs.append(enp)
+        val_loss.update_state(np.mean(np.square(enp)))
+
+        # 使用 raw 中的 'lost' 列进行分组
+    
+
+        try:
+            rb_np = rb.numpy()
+        except Exception:
+            rb_np = np.array(rb)
+
+        # 如果 idx_lost 未定义或不在 raw columns 中，跳过分组统计
+        if idx_lost is None:
+            continue
+
+        # 取出每个样本的 lost 值（兼容 rb_np 为 1D 或 2D 的情况）
+        if rb_np.ndim == 1:
+            # 单样本情况，rb_np 长度等于列数
+            lost_vals = np.array([rb_np[idx_lost]]).astype(np.int32)
+        else:
+            lost_vals = rb_np[:, idx_lost].astype(np.int32)
+        for i, m in enumerate(lost_vals):
+            key = int(m) if int(m) <= 2 else 3
+            buckets[key].append(float(enp[i]))
+
+    # 计算并输出每个分组的指标
+    for k in sorted(buckets.keys()):
+        arr = np.array(buckets[k])
+        cnt = arr.size
+        if cnt > 0:
+            rmse_k = np.sqrt(np.mean(np.square(arr)))
+            mae_k = np.mean(np.abs(arr))
+        else:
+            rmse_k = float('nan')
+            mae_k = float('nan')
+        name = f"{k}" if k < 3 else "3+"
+        logging.info(f"Val Missing={name}: count={cnt}, RMSE={rmse_k:.4f}, MAE={mae_k:.4f}")
+        print(f"Val Missing={name}: count={cnt}, RMSE={rmse_k:.4f}, MAE={mae_k:.4f}")
+
     return model
 
 # ==============================================
@@ -894,7 +941,7 @@ from tensorflow.keras.callbacks import EarlyStopping
 def rmse(y_true, y_pred):
     return tf.sqrt(tf.reduce_mean(tf.square(y_true - y_pred)))
 
-def train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt):
+def train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt, raw_val=None):
     print("train_model2：mlp预测vanishTime 直接回归任务")
     logging.info("启动 MLP 直接回归模型训练（预测消失时间）")
    
@@ -918,8 +965,8 @@ def train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_co
     
     
     early_stop = EarlyStopping(
-            monitor='val_loss',
-            patience=30,
+            monitor='loss',
+            patience=100,
             restore_best_weights=True,
             verbose=1
         )
@@ -934,7 +981,7 @@ def train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_co
   
 
     # 训练回归模型
-    model_vanish_reg.fit(train_dataset, validation_data=val_dataset, epochs=args.epochs,verbose=1,callbacks=[early_stop])
+    model_vanish_reg.fit(train_dataset, validation_data=val_dataset, epochs=args.epochs,verbose=1,callbacks=[early_stop],shuffle=True)
 
 
     
@@ -968,7 +1015,52 @@ def train_model2(X_train, y_train, raw_train, train_dataset, val_dataset, raw_co
     logging.info(f"回归模型已保存至: {model_path}")
 
     logging.info("train_model2：mlp reg 训练完成！")
-    # 返回训练好的模型
+
+    ################################
+    # 按丢失车辆数对验证集进行单独评估（0,1,2,3+，其中3表示3+）
+    ###############################
+   
+    idx_lost = raw_cols.index('lost') if 'lost' in raw_cols else None
+    raw_val_np = np.asarray(raw_val)
+    print(f"raw_val_np.shape={raw_val_np.shape}, idx_lost={idx_lost}")
+
+    # 获取验证集真实值（从 val_dataset 或者 raw_val 旁路收集）
+    y_true_list = []
+    for xb, yb in val_dataset:
+        y_true_list.append(yb.numpy().reshape(-1))
+   
+    y_true = np.concatenate(y_true_list)
+  
+
+    # 预测验证集（与 val_dataset 保持相同顺序）
+    y_pred = model_vanish_reg.predict(val_dataset)
+    y_pred = np.asarray(y_pred).reshape(-1)
+
+    # 残差（预测 - 真实）
+    residuals = y_pred - y_true
+
+    # 分组统计
+    buckets = {0: [], 1: [], 2: [], 3: []}
+    n_res = residuals.shape[0]
+    for i in range(n_res):
+        lost_val = int(raw_val_np[i, idx_lost])
+        key = lost_val if lost_val <= 2 else 3
+        buckets[key].append(float(residuals[i]))
+
+    # 输出每个分组的 RMSE/MAE
+    for k in sorted(buckets.keys()):
+        arr = np.array(buckets[k])
+        cnt = arr.size
+        if cnt > 0:
+            rmse_k = np.sqrt(np.mean(np.square(arr)))
+            mae_k = np.mean(np.abs(arr))
+        else:
+            rmse_k = float('nan')
+            mae_k = float('nan')
+        name = f"{k}" if k < 3 else "3+"
+        logging.info(f"Regress Val Missing={name}: count={cnt}, RMSE={rmse_k:.4f}, MAE={mae_k:.4f}")
+        print(f"Regress Val Missing={name}: count={cnt}, RMSE={rmse_k:.4f}, MAE={mae_k:.4f}")
+
     return model_vanish_reg
 
 # ==============================================
@@ -982,7 +1074,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=8,help='批处理大小')
     parser.add_argument('--lr', type=float, default=0.001, help='学习率')
     parser.add_argument('--test_size', type=float, default=0.9, help='验证集比例')
-    parser.add_argument('--num_types', type=int, default=4, help='车辆类别数')
+    parser.add_argument('--num_types', type=int, default=6, help='车辆类别数')
     parser.add_argument('--unit', type=int, default=128, help='ResNet隐藏层单元数')
     parser.add_argument('--layNum', type=int, default=8, help='ResNet块数量')
     parser.add_argument('--log_path', type=str, default='training_log.log', help='日志文件路径')
