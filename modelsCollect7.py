@@ -31,8 +31,7 @@ import jax
 from tensorflow import keras
 import gc
 import jax.numpy as jnp
-from tensorflow.keras.mixed_precision import set_global_policy
-set_global_policy('mixed_float16')
+
 
 
 from jax.lib import xla_client
@@ -461,7 +460,7 @@ def run_batch_simulation2(nn_output_batch, raw_data_batch, param_bounds, num_typ
 
 #------------------------------------------------------------------------------------------
 from modelsLostReg import genDatasetLost
-from modelsLostReg import genSamplesByRandomRemovingVehicle
+from modelsLostReg import genSamplesByRandomRemovingVehicle,genSamplesRemovingVehicleWithNum
 def main(args):
     test_size = args.test_size
     batch_size = args.batch_size
@@ -492,10 +491,14 @@ def main(args):
 
     print(f"{'-'*100}")
     ## 生成数据，去掉车,其中df_missveh2，加入列df_missveh：['removed_vehicles'] = removed_vehicles_posi
-    df_missveh,queued_info,df_missveh2 = genSamplesByRandomRemovingVehicle(df1, remove_ratio=0.6)
+    #df_missveh,queued_info,df_missveh2 = genSamplesByRandomRemovingVehicle(df1, remove_ratio=0.6)
+    df_missveh_rn1,queued_info_rn1,df_missveh2_rn1  = genSamplesRemovingVehicleWithNum(df1, num_to_remove = 1)
+    df_missveh_rn2,queued_info_rn2,df_missveh2_rn2 = genSamplesRemovingVehicleWithNum(df1, num_to_remove = 2)
+    df_missveh_rn3,queued_info_rn3,df_missveh2_rn3  = genSamplesRemovingVehicleWithNum(df1, num_to_remove = 3)
+    df_missveh_rn4,queued_info_rn4,df_missveh2_rn4  = genSamplesRemovingVehicleWithNum(df1, num_to_remove = 4)
     
-    print('len(queued_vehicles_removed):',len(queued_info)) 
-   
+    df_step2_missveh2 = pd.concat([df_missveh2_rn1, df_missveh2_rn1, df_missveh2_rn1, df_missveh2_rn4], ignore_index=True)
+
     print(f"{'-'*100}")
     
     #调试用，检测一下df_missveh2中，丢失的车辆位置是否正确
@@ -517,10 +520,10 @@ def main(args):
    
     X_train2, X_val2, y_train2, y_val2, \
         raw_train2, raw_val2, train_dataset2, val_dataset2, \
-            raw_cols2 = genDatasetLost(df_missveh2, args.test_size, args.batch_size  )
+            raw_cols2 = genDatasetLost(df_step2_missveh2, args.test_size, args.batch_size  )
 
-    df_step2_missveh2 = df_missveh2.copy()#df_missveh的['removed_vehicles']为None,df_missveh2['removed_vehicles']为具体删除车辆的信息位置和名称
-    df_step2_missveh = df_missveh.copy()
+    df_step2_missveh2_backup = df_step2_missveh2.copy()#df_missveh的['removed_vehicles']为None,df_missveh2['removed_vehicles']为具体删除车辆的信息位置和名称
+  
     
     
         
@@ -535,7 +538,7 @@ def main(args):
     if args.trainvalmode == 0:
          df_all = df1
     if args.trainvalmode == 1:
-         df_all = pd.concat([df1, df_missveh2], ignore_index=True)
+         df_all = pd.concat([df1, df_step2_missveh2], ignore_index=True)
             
   
             
@@ -559,17 +562,17 @@ def main(args):
     if len(df) > numSamples:
         # 先用KMeans聚类，保证多样性
         sample_features = df[[c for c in df.columns if 'car_position_' in c or 'car_speed_' in c]].values
-        n_clusters = min(200, len(df) // 10)
+        n_clusters = min(100, len(df) // 10)
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=30)
         cluster_labels = kmeans.fit_predict(sample_features)
         sampled_indices = []
 
-        #1/4KMeans聚类抽样，3/4lost加权抽样
+        #1/2KMeans聚类抽样，1/2lost加权抽样
         for cluster in range(n_clusters):
             cluster_idx = np.where(cluster_labels == cluster)[0]
             if len(cluster_idx) > 0:
                 # 每个簇随机采样一定数量
-                n = max(1, int(numSamples/4/ n_clusters))
+                n = max(1, int(numSamples/2/ n_clusters))
                 chosen = np.random.choice(cluster_idx, size=min(n, len(cluster_idx)), replace=False)
                 sampled_indices.extend(chosen)
         sampleKeamNum = len(sampled_indices)
@@ -577,7 +580,7 @@ def main(args):
         if len(sampled_indices) < numSamples:
             remaining = list(set(range(len(df))) - set(sampled_indices))
             if len(remaining) > 0:
-                oversample_factor = 5.0
+                oversample_factor = 2.0
                 lost_rem = df['lost'].iloc[remaining].fillna(0).astype(float).values
                 weights_rem = 1.0 + lost_rem * oversample_factor
                 probs_rem = weights_rem / np.sum(weights_rem)
@@ -651,7 +654,7 @@ def main(args):
     # 方法2. 直接用原来的数据补,速度靠前车速度,简单点
     if args.fixdata == 1:
         print('方法1修补数据')
-        lost_indices = df.index[df['lost'] == 1].tolist()
+        lost_indices = df.index[df['lost'] > 0].tolist()
         for idx in lost_indices:
             removed_vehs = df.at[idx, 'removed_vehicles']#(丢失车辆命名,丢失车辆位置,车辆命名i的int值)
             for i in range(len(removed_vehs)):
@@ -666,32 +669,60 @@ def main(args):
 
     # 方法2. 根据'lost'和'removed_vehicles'列，车辆丢失的位置,前车-5，或者后车+5
     if args.fixdata == 2:
-        print('方法2修补数据,+—5前后车')
-        lost_indices = df.index[df['lost'] == 1].tolist()
-        if len(lost_indices) >0:       
-            for idx in lost_indices:
-                car_positions1 = df.loc[idx, [c for c in df.columns if c.startswith('car_position_')]].values
-                car_speed1 = df.loc[idx, [c for c in df.columns if c.startswith('car_speed_')]].values
+        print('方法2修补数据：根据前后车位置动态插入（偏移量±5米）')
+        lost_indices = df.index[df['lost'] > 0].tolist()          # 修正：去掉多余的空格和数字1
+        offset = 5.0                                             # 偏移量（前车+5，后车-5）
+        min_gap = 0.5                                            # 避免重叠的最小间距
 
-                car_positions1 = [c for c in car_positions1 if c != -1]
-                car_speed1 =  [c for c in car_speed1 if c != -1]
+        for idx in lost_indices:
+            # 收集当前帧所有有效车辆的位置与速度（排除 -1）
+            car_pos_cols = [c for c in df.columns if c.startswith('car_position_')]
+            car_speed_cols = [c for c in df.columns if c.startswith('car_speed_')]
+            valid_positions = []
+            valid_speeds = []
+            for pos_col, speed_col in zip(car_pos_cols, car_speed_cols):
+                pos = df.at[idx, pos_col]
+                if pos != -1:
+                    valid_positions.append(pos)
+                    valid_speeds.append(df.at[idx, speed_col])
 
+            # 如果没有有效车辆，无法推断，跳过当前帧
+            if not valid_positions:
+                continue
 
-                removed_vehs = df.at[idx, 'removed_vehicles']#(丢失车辆命名,丢失车辆位置,车辆命名i的int值)
-                for i in range(len(removed_vehs)):
-                    car_pos_col,car_pos,car_pos_i = removed_vehs[i]
-                    car_positions1 = np.array(car_positions1)  
-                    tmp = car_positions1-car_pos
+            removed_vehs = df.at[idx, 'removed_vehicles']         # 每个元素: (_, orig_car_pos, car_pos_i)
+            # 按丢失车辆的原始位置排序，保证插入顺序合理
+            removed_sorted = sorted(removed_vehs, key=lambda x: x[1])
 
-                    indexTmp = np.argmin(np.abs(tmp))
-                    #车辆丢失的位置,前车+5，或者后车-5
-                    if car_pos > car_positions1[indexTmp]:#car_pos样本中一般都是距离红灯距离
-                        car_pos_pTmp= car_positions1[indexTmp]+5.0
-                    else:
-                        car_pos_pTmp= car_positions1[indexTmp]-5.0
+            for _, orig_car_pos, car_pos_i in removed_sorted:
+                # 在当前有效车辆中寻找与原始位置最接近的车辆
+                valid_arr = np.array(valid_positions)
+                nearest_idx = np.argmin(np.abs(valid_arr - orig_car_pos))
+                nearest_pos = valid_arr[nearest_idx]
+                nearest_speed = valid_speeds[nearest_idx]
 
-                    df.at[idx, f'car_position_{car_pos_i}'] = car_pos_pTmp#直接用最近车位置的+或者-代替
-                    df.at[idx, f'car_speed_{car_pos_i}'] = car_speed1[indexTmp]#直接用最近车的速度代替
+                # 根据原始位置与最近车的关系决定新位置
+                if orig_car_pos > nearest_pos:          # 丢失车辆更靠近红灯（前车）
+                    new_pos = nearest_pos + offset
+                else:                                   # 丢失车辆更远离红灯（后车）
+                    new_pos = nearest_pos - offset
+
+                # 避免新位置与最近车过于接近（防止重叠）
+                if abs(new_pos - nearest_pos) < min_gap:
+                    new_pos = nearest_pos + min_gap if orig_car_pos > nearest_pos else nearest_pos - min_gap
+
+                # 写入数据帧
+                df.at[idx, f'car_position_{car_pos_i}'] = new_pos
+                df.at[idx, f'car_speed_{car_pos_i}'] = nearest_speed
+
+                # 将新插入的车辆加入有效列表，供后续丢失车辆参考
+                valid_positions.append(new_pos)
+                valid_speeds.append(nearest_speed)
+                # 保持有效列表有序，以便下次查找最近车
+                combined = sorted(zip(valid_positions, valid_speeds), key=lambda x: x[0])
+                valid_positions, valid_speeds = zip(*combined) if combined else ([], [])
+                valid_positions = list(valid_positions)
+                valid_speeds = list(valid_speeds)
         
 
         

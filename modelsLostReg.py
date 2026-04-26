@@ -269,6 +269,117 @@ def genSamplesByRandomRemovingVehicle(df, remove_ratio=0.1):
     #print(removed_rows1[0])#调试用
     return df_missveh,rowSamplesInfo,df_missveh2
 
+def genSamplesRemovingVehicleWithNum(df, num_to_remove = 1):
+    """
+    根据上下文，读入csv文件，获得当前样本的下排队车辆有那些以及相应的位置和序号
+    给出当前目标车对于的排队车辆的序号i
+    同时实现数据增强：随机去掉一些车辆位置和速度数据，模拟传感器丢失数据的情况
+    """
+   
+
+    
+    # 获取所有车辆位置列和速度列
+    car_pos_cols = [col for col in df.columns if col.startswith('car_position_')]
+    car_speed_cols = [col for col in df.columns if col.startswith('car_speed_')]
+
+    # 结果变量
+    rowSamplesInfo = []
+    removed_rows = []
+    removed_rows1 = []
+    for idx, row in df.iterrows():#idx是样本索引，row是样本数据
+        row['lost'] = 0
+
+        #----------------------------------------------------------------------------------
+        #A.取当前样本的所有车辆位置
+        positions = []##pos_col i命名,pos_val是位置值，car_posi是车辆命名转为 int
+        for pos_col in car_pos_cols:
+            pos_val = row[pos_col]#row的每一位置值，可能是-1或者有效位置值
+            if pos_val != -1 and not pd.isna(pos_val):  # 有效位置值
+                # 提取车辆索引（从列名中获取）
+                car_posi = int(pos_col.replace('car_position_', ''))
+                positions.append((pos_col,pos_val,car_posi))#pos_col i命名,pos_val是位置值，car_posi是车辆命名转为 int
+
+        # 按位置排序（位置越大，距离交叉口越近，越在前。注意现在距离还是位置不是距离路口文职），position是当前row的车辆位置值，包括pos,car_posi
+        positions.sort(key=lambda x: x[1],reverse=True)
+        positions0 = positions.copy()
+        # 获取主车位置（目标车）
+        main_car_pos = row['main_car_position'] if 'main_car_position' in row else row['car_position']
+
+        # position是当前row的车辆位置值，包括pos_col,pos,car_posi。找到主车在position排队中的位置
+        main_car_pos_col = -1
+        main_car_pos_i = -1
+        for queue_idx, (pos_col,pos, car_posi) in enumerate(positions):
+            if abs(pos - main_car_pos) < 1e-3:  # 使用小的容差值比较浮点数
+                main_car_pos_col = pos_col
+                main_car_pos_i = car_posi
+                break
+            
+
+        #----------------------------------------------------------------------------------
+        #B.当前样本随机移除一些车辆数据，3个车辆以上，至少去除一辆车
+
+
+        removed_cars = []#pos_col i命名,pos_val是位置值，car_posi是车辆命名转为 int
+        if num_to_remove  > 0:
+            # 计算要移除的车辆数量
+            num_vehicles = len(positions)
+            if num_vehicles <=num_to_remove+1:#2辆车不去除,当前车的数量大于要移除的车辆数量+1（主车）才去除
+                 continue
+            
+            row['lost'] = 1 #确实移除了车辆
+            
+
+            # 选择要移除的车辆（但不能移除主车），基本从排队头车开始
+            removed_counter = 0
+            row['lost'] = removed_counter
+            for pos_idx, (pos_col,pos, car_posi) in enumerate(positions):
+                if removed_counter >= num_to_remove:
+                    #print("当前样本已经移除车辆数目",removed_counter)
+                    break
+                if (main_car_pos_i == car_posi) | (pos >main_car_pos):
+                    #主车不移除
+                    #移除车必须大于主车位置
+                    continue
+                
+                removed_counter = removed_counter+1
+                removed_cars.append(positions[pos_idx])
+                positions.pop(pos_idx)
+                row[pos_col] = -1 #真删除 修改当前row的car_position_i和car_speed_i为-1
+                car_speed_col = pos_col.replace('car_position_', 'car_speed_')
+                row[car_speed_col] = -1 #
+            row['lost'] = removed_counter
+        #----------------------------------------------------------------------------------
+        #C.无论移除还是没有移除，都appeend当前row到removed_rows中，后续会构建一个新的DataFrame df_missveh    
+        
+        removed_rows.append(row)
+        row1 = row.copy()
+        #'removed_vehicles'不是none，是有数据的，用于后期简单对比（修补数据用原来数据还是预测数据）
+        row1['removed_vehicles'] = removed_cars
+        removed_rows1.append(row1)
+
+        # 构建排队车辆信息
+        queued_vehicles = {
+            'df_idx': idx,
+            'original_queued_vehicles': positions0,#pos_col,pos,car_posi
+            'main_car_pos_col': main_car_pos_col,
+            'main_car_pos_i':  main_car_pos_i ,
+            'main_car_position': main_car_pos,
+            'removed_vehicles': removed_cars, #pos_col,pos,car_posi
+            'removed_vehicles_count': len(removed_cars)
+        }
+        #print(queued_vehicles)
+        rowSamplesInfo.append(queued_vehicles)
+
+    df_missveh = pd.DataFrame(removed_rows)   
+    df_missveh2 = pd.DataFrame(removed_rows1) 
+    
+    #print(removed_rows[0])#调试用
+    #print(removed_rows1[0])#调试用
+    return df_missveh,rowSamplesInfo,df_missveh2
+
+
+
+
 #--------------------------------------------------------------------------------------------------------
 # 数据准备函数
 def genDatasetVanishTime(df,test_size,batch_size):
