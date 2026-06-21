@@ -378,3 +378,8 @@ python modelsCollect6.py --batch_size 16 --epochs 20 --test_size 0.2 --lr 0.001 
 - 交通仿真与建模
 - 端到端深度学习与物理仿真结合
 - 缺失数据自动补全与鲁棒性建模
+
+
+### 适用场景
+py39_tf215_jax04_gpu
+pip install tensorflow[and-cuda]==2.15.1

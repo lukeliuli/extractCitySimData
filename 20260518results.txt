@@ -1,0 +1,159 @@
+2026-05-18 09:44:05,089 [INFO] - 训练集评估 - MAE: 2.7783, MSE: 12.0848, RMSE: 3.4590
+2026-05-18 09:44:05,089 [INFO] - 验证集评估 - MAE: 2.8222, MSE: 12.7964, RMSE: 3.5645
+2026-05-18 09:44:09,139 [INFO] - 回归模型已保存至: ./tmpModes/mlp_regression_model.h5
+2026-05-18 09:44:09,140 [INFO] - train_model2：mlp reg 训练完成！
+raw_val_np.shape=(9500, 45), idx_lost=42
+2026-05-18 09:44:16,314 [INFO] - Regress Val Missing=0: count=3686, RMSE=4.0604, MAE=3.2233
+Regress Val Missing=0: count=3686, RMSE=4.0604, MAE=3.2233
+2026-05-18 09:44:16,314 [INFO] - Regress Val Missing=1: count=5107, RMSE=3.2768, MAE=2.6122
+Regress Val Missing=1: count=5107, RMSE=3.2768, MAE=2.6122
+2026-05-18 09:44:16,315 [INFO] - Regress Val Missing=2: count=432, RMSE=2.3212, MAE=1.8548
+Regress Val Missing=2: count=432, RMSE=2.3212, MAE=1.8548
+2026-05-18 09:44:16,315 [INFO] - Regress Val Missing=3+: count=275, RMSE=3.6344, MAE=2.8670
+Regress Val Missing=3+: count=275, RMSE=3.6344, MAE=2.8670
+2026-05-18 09:44:16,315 [INFO] - =================================================================按红灯时间分组验证
+2026-05-18 09:44:29,320 [INFO] - ===== 按剩余红灯时间（3秒间隔）验证误差 =====
+===== 按剩余红灯时间（3秒间隔）验证误差 =====
+2026-05-18 09:44:29,320 [INFO] - Regress Val RedLight=0-3s: count=1971, RMSE=4.3953, MAE=3.4869
+Regress Val RedLight=0-3s: count=1971, RMSE=4.3953, MAE=3.4869
+2026-05-18 09:44:29,321 [INFO] - Regress Val RedLight=3-6s: count=1399, RMSE=4.2701, MAE=3.5495
+Regress Val RedLight=3-6s: count=1399, RMSE=4.2701, MAE=3.5495
+2026-05-18 09:44:29,321 [INFO] - Regress Val RedLight=6-9s: count=1432, RMSE=2.8640, MAE=2.3934
+Regress Val RedLight=6-9s: count=1432, RMSE=2.8640, MAE=2.3934
+2026-05-18 09:44:29,321 [INFO] - Regress Val RedLight=9-12s: count=784, RMSE=2.1509, MAE=1.6740
+Regress Val RedLight=9-12s: count=784, RMSE=2.1509, MAE=1.6740
+2026-05-18 09:44:29,321 [INFO] - Regress Val RedLight=12-15s: count=836, RMSE=2.4928, MAE=2.0787
+Regress Val RedLight=12-15s: count=836, RMSE=2.4928, MAE=2.0787
+2026-05-18 09:44:29,322 [INFO] - Regress Val RedLight=15-18s: count=743, RMSE=2.7482, MAE=2.2670
+Regress Val RedLight=15-18s: count=743, RMSE=2.7482, MAE=2.2670
+2026-05-18 09:44:29,322 [INFO] - Regress Val RedLight=18-21s: count=609, RMSE=2.5713, MAE=2.1064
+Regress Val RedLight=18-21s: count=609, RMSE=2.5713, MAE=2.1064
+2026-05-18 09:44:29,322 [INFO] - Regress Val RedLight=21-24s: count=565, RMSE=2.4372, MAE=1.8036
+Regress Val RedLight=21-24s: count=565, RMSE=2.4372, MAE=1.8036
+2026-05-18 09:44:29,322 [INFO] - Regress Val RedLight=>24s: count=1161, RMSE=4.5860, MAE=3.8835
+Regress Val RedLight=>24s: count=1161, RMSE=4.5860, MAE=3.8835
+2026-05-18 09:44:29,322 [INFO] - =================================================================按主车前排队车辆数分组验证
+2026-05-18 09:44:34,369 [INFO] - ===== 按主车前排队车辆数验证误差 =====
+===== 按主车前排队车辆数验证误差 =====
+2026-05-18 09:44:34,370 [INFO] - Regress Val Queue=0辆: count=3383, RMSE=4.2369, MAE=3.5093
+Regress Val Queue=0辆: count=3383, RMSE=4.2369, MAE=3.5093
+2026-05-18 09:44:34,370 [INFO] - Regress Val Queue=1辆: count=2396, RMSE=3.3655, MAE=2.7850
+Regress Val Queue=1辆: count=2396, RMSE=3.3655, MAE=2.7850
+2026-05-18 09:44:34,370 [INFO] - Regress Val Queue=2辆: count=1648, RMSE=2.3091, MAE=1.8039
+Regress Val Queue=2辆: count=1648, RMSE=2.3091, MAE=1.8039
+2026-05-18 09:44:34,371 [INFO] - Regress Val Queue=3辆: count=1059, RMSE=2.5051, MAE=1.7893
+Regress Val Queue=3辆: count=1059, RMSE=2.5051, MAE=1.7893
+2026-05-18 09:44:34,371 [INFO] - Regress Val Queue=>4辆: count=1014, RMSE=4.2441, MAE=3.3515
+
+
+
+2026-05-18 11:36:44,982 [INFO] - =================================================================验证开始
+JAX SIM Batch simulation time (s): 4.30
+JAX SIM Batch simulation time (s): 4.65
+JAX SIM Batch simulation time (s): 4.58
+JAX SIM Batch simulation time (s): 4.62
+JAX SIM Batch simulation time (s): 4.40
+JAX SIM Batch simulation time (s): 1.83
+JAX SIM Batch simulation time (s): 4.47
+JAX SIM Batch simulation time (s): 4.60
+JAX SIM Batch simulation time (s): 4.66
+JAX SIM Batch simulation time (s): 4.60
+JAX SIM Batch simulation time (s): 4.49
+JAX SIM Batch simulation time (s): 4.54
+JAX SIM Batch simulation time (s): 1.60
+JAX SIM Batch simulation time (s): 4.56
+JAX SIM Batch simulation time (s): 4.57
+JAX SIM Batch simulation time (s): 4.57
+JAX SIM Batch simulation time (s): 4.54
+2026-05-18 11:37:57,093 [INFO] - Val RMSE: 5.2152,Val Mae:4.1896
+2026-05-18 11:37:57,093 [INFO] - 训练完成！
+2026-05-18 11:37:59,234 [INFO] - Model saved: model_epoch_150.h5
+2026-05-18 11:37:59,235 [INFO] - =================================================================最后的验证
+JAX SIM Batch simulation time (s): 4.50
+JAX SIM Batch simulation time (s): 4.53
+JAX SIM Batch simulation time (s): 1.56
+JAX SIM Batch simulation time (s): 4.58
+JAX SIM Batch simulation time (s): 4.36
+JAX SIM Batch simulation time (s): 4.54
+JAX SIM Batch simulation time (s): 4.50
+JAX SIM Batch simulation time (s): 4.57
+JAX SIM Batch simulation time (s): 4.54
+JAX SIM Batch simulation time (s): 1.57
+JAX SIM Batch simulation time (s): 4.46
+JAX SIM Batch simulation time (s): 6.44
+JAX SIM Batch simulation time (s): 4.56
+JAX SIM Batch simulation time (s): 4.53
+JAX SIM Batch simulation time (s): 4.66
+JAX SIM Batch simulation time (s): 1.63
+JAX SIM Batch simulation time (s): 4.57
+2026-05-18 11:39:09,800 [INFO] - Val Missing=0: count=705, RMSE=4.7941, MAE=3.8872
+Val Missing=0: count=705, RMSE=4.7941, MAE=3.8872
+2026-05-18 11:39:09,801 [INFO] - Val Missing=1: count=861, RMSE=5.1046, MAE=4.0211
+Val Missing=1: count=861, RMSE=5.1046, MAE=4.0211
+2026-05-18 11:39:09,801 [INFO] - Val Missing=2: count=86, RMSE=5.0862, MAE=4.7899
+Val Missing=2: count=86, RMSE=5.0862, MAE=4.7899
+2026-05-18 11:39:09,801 [INFO] - Val Missing=3+: count=48, RMSE=10.5819, MAE=10.5806
+Val Missing=3+: count=48, RMSE=10.5819, MAE=10.5806
+2026-05-18 11:39:09,801 [INFO] - =================================================================按剩余红灯时间分组验证（模型0）
+JAX SIM Batch simulation time (s): 4.49
+JAX SIM Batch simulation time (s): 4.57
+JAX SIM Batch simulation time (s): 4.57
+JAX SIM Batch simulation time (s): 4.60
+JAX SIM Batch simulation time (s): 4.41
+JAX SIM Batch simulation time (s): 4.56
+JAX SIM Batch simulation time (s): 1.63
+JAX SIM Batch simulation time (s): 4.63
+JAX SIM Batch simulation time (s): 4.59
+JAX SIM Batch simulation time (s): 4.61
+JAX SIM Batch simulation time (s): 4.50
+JAX SIM Batch simulation time (s): 4.60
+JAX SIM Batch simulation time (s): 4.58
+JAX SIM Batch simulation time (s): 1.63
+JAX SIM Batch simulation time (s): 4.59
+JAX SIM Batch simulation time (s): 4.60
+JAX SIM Batch simulation time (s): 4.70
+2026-05-18 11:40:22,090 [INFO] - Val RedLight=0-3s: count=390, RMSE=5.4550, MAE=4.7410
+Val RedLight=0-3s: count=390, RMSE=5.4550, MAE=4.7410
+2026-05-18 11:40:22,091 [INFO] - Val RedLight=3-6s: count=248, RMSE=5.0038, MAE=4.0242
+Val RedLight=3-6s: count=248, RMSE=5.0038, MAE=4.0242
+2026-05-18 11:40:22,091 [INFO] - Val RedLight=6-9s: count=258, RMSE=4.9285, MAE=3.9868
+Val RedLight=6-9s: count=258, RMSE=4.9285, MAE=3.9868
+2026-05-18 11:40:22,091 [INFO] - Val RedLight=9-12s: count=131, RMSE=5.2636, MAE=3.9789
+Val RedLight=9-12s: count=131, RMSE=5.2636, MAE=3.9789
+2026-05-18 11:40:22,091 [INFO] - Val RedLight=12-15s: count=158, RMSE=4.9019, MAE=3.8150
+Val RedLight=12-15s: count=158, RMSE=4.9019, MAE=3.8150
+2026-05-18 11:40:22,092 [INFO] - Val RedLight=15-18s: count=107, RMSE=5.4119, MAE=4.1131
+Val RedLight=15-18s: count=107, RMSE=5.4119, MAE=4.1131
+2026-05-18 11:40:22,092 [INFO] - Val RedLight=18-21s: count=97, RMSE=5.6040, MAE=4.4952
+Val RedLight=18-21s: count=97, RMSE=5.6040, MAE=4.4952
+2026-05-18 11:40:22,092 [INFO] - Val RedLight=21-24s: count=99, RMSE=6.0434, MAE=4.9616
+Val RedLight=21-24s: count=99, RMSE=6.0434, MAE=4.9616
+2026-05-18 11:40:22,092 [INFO] - Val RedLight=>24s: count=212, RMSE=4.8245, MAE=3.5635
+Val RedLight=>24s: count=212, RMSE=4.8245, MAE=3.5635
+2026-05-18 11:40:22,092 [INFO] - =================================================================按主车前排队车辆数分组验证（模型0）
+JAX SIM Batch simulation time (s): 4.50
+JAX SIM Batch simulation time (s): 4.59
+JAX SIM Batch simulation time (s): 4.57
+JAX SIM Batch simulation time (s): 1.61
+JAX SIM Batch simulation time (s): 4.40
+JAX SIM Batch simulation time (s): 4.59
+JAX SIM Batch simulation time (s): 4.47
+JAX SIM Batch simulation time (s): 4.56
+JAX SIM Batch simulation time (s): 4.56
+JAX SIM Batch simulation time (s): 4.76
+JAX SIM Batch simulation time (s): 1.50
+JAX SIM Batch simulation time (s): 4.52
+JAX SIM Batch simulation time (s): 4.55
+JAX SIM Batch simulation time (s): 4.52
+JAX SIM Batch simulation time (s): 4.56
+JAX SIM Batch simulation time (s): 4.57
+JAX SIM Batch simulation time (s): 4.53
+2026-05-18 11:41:33,914 [INFO] - Val Queue=0辆: count=645, RMSE=6.2816, MAE=5.1048
+Val Queue=0辆: count=645, RMSE=6.2816, MAE=5.1048
+2026-05-18 11:41:33,915 [INFO] - Val Queue=1辆: count=435, RMSE=4.7529, MAE=4.0754
+Val Queue=1辆: count=435, RMSE=4.7529, MAE=4.0754
+2026-05-18 11:41:33,915 [INFO] - Val Queue=2辆: count=304, RMSE=4.1873, MAE=3.3073
+Val Queue=2辆: count=304, RMSE=4.1873, MAE=3.3073
+2026-05-18 11:41:33,915 [INFO] - Val Queue=3辆: count=167, RMSE=2.2949, MAE=1.6293
+Val Queue=3辆: count=167, RMSE=2.2949, MAE=1.6293
+2026-05-18 11:41:33,916 [INFO] - Val Queue=>4辆: count=149, RMSE=5.6464, MAE=5.2315
