@@ -471,7 +471,7 @@ def genDatasetLostFlagVanishTime(df, test_size, batch_size):
 
     # Identify feature columns
     feature_cols = [c for c in df.columns if ('car_position_' in c or 'car_speed_' in c or 'redLight' in c)]
-    feature_cols.add('main_car_position')
+    feature_cols.append('main_car_position')
     # Prepare raw data columns
     raw_cols_set = set(feature_cols)
     raw_cols_set.add('lane')

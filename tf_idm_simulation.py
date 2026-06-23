@@ -1,5 +1,13 @@
 import tensorflow as tf
-@tf.function(reduce_retracing=True)
+
+# 明确声明 input_signature，避免不同输入形状导致的多次 retrace
+@tf.function(
+    input_signature=[
+        tf.TensorSpec([None, None, 6], tf.float32),
+        tf.TensorSpec([None, None], tf.int32),
+    ],
+    experimental_relax_shapes=True,
+)
 def get_idm_params(scaled_params, vtypes):
     v0 = tf.gather(scaled_params[:, :, 0], vtypes, axis=1, batch_dims=1)
     T = tf.gather(scaled_params[:, :, 1], vtypes, axis=1, batch_dims=1)
@@ -12,6 +20,22 @@ def get_idm_params(scaled_params, vtypes):
     return v0, T, s0, a_max, b, delta, length, rtime
 
 # 新函数签名：移除columns，增加5个预计算索引张量
+@tf.function(
+    input_signature=[
+        tf.TensorSpec([None, None], tf.float32),        # nn_output_batch: [batch, out_dim]
+        tf.TensorSpec([None, None], tf.float32),        # raw_data_batch: [batch, n_cols]
+        tf.TensorSpec([None, 6, 2], tf.float32),        # param_bounds: [num_types, 6, 2]
+        tf.TensorSpec([], tf.int32),                   # num_types: scalar
+        tf.TensorSpec([None], tf.int32),               # pos_idx: [num_veh]
+        tf.TensorSpec([None], tf.int32),               # speed_idx: [num_veh]
+        tf.TensorSpec([], tf.int32),                   # idx_main: scalar
+        tf.TensorSpec([], tf.int32),                   # idx_inter: scalar
+        tf.TensorSpec([], tf.int32),                   # idx_red: scalar
+        tf.TensorSpec([], tf.float32),                 # dt: scalar
+        tf.TensorSpec([], tf.int32),                   # go_flag: scalar
+    ],
+    experimental_relax_shapes=True,
+)
 def tf_idm_simulation(
     nn_output_batch, raw_data_batch, param_bounds, num_types,
     pos_idx, speed_idx, idx_main, idx_inter, idx_red, dt, go_flag
@@ -104,8 +128,12 @@ def tf_idm_simulation(
         dist_to_red = inter_pos[:, None] - pos_in
         #red_hold = (red_timer[:, None] > 0) & (dist_to_red < 2.0) & (dist_to_red > -1.0)
         red_hold = (red_in[:, None] > 0) & (dist_to_red < 30.0) & (dist_to_red > -1.0) #按统计平均30到50米，开始收油减速
-        acc = tf.where(red_hold, -b * 2.0, acc)
-        acc = tf.clip_by_value(acc, -b * 2.0, a_max)
+
+        red_brake_acc = -b * 2.0  # 红灯强制减速度
+
+        # 核心修改：红灯时取两者最小值（更负=刹车更猛），不覆盖IDM的急刹需求
+        acc = tf.where(red_hold, tf.minimum(acc, red_brake_acc), acc)
+        acc = tf.clip_by_value(acc, -9, a_max)
         vel_new = tf.where(vanished_in, vel_in, tf.clip_by_value(vel_in + acc * dt, 0.0, 50.0))
         pos_new = tf.where(vanished_in, pos_in, pos_in + vel_new * dt)
         new_vanish = (pos_new > inter_pos[:, None] + 5.0) & ~vanished_in

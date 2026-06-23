@@ -404,6 +404,23 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         y_batch = tf.reshape(y_batch, [batch_size])
         return predicted_times - y_batch
 
+    # 在训练前做一次仿真函数的warm-up以触发tf.function编译，避免首个训练batch出现长时间编译延迟
+    try:
+        warm_batch_size = min(args.batch_size, X_train.shape[0])
+        if warm_batch_size > 0:
+            # 构造伪网络输出和原始数据的切片进行一次调用
+            dummy_nn = tf.zeros((warm_batch_size, (num_types + 1) * 6), dtype=tf.float32)
+            dummy_raw = tf.convert_to_tensor(raw_train[:warm_batch_size], dtype=tf.float32)
+            # 调用一次以触发tf.function的编译/缓存
+            _ = tf_idm_simulation(
+                dummy_nn, dummy_raw, param_bounds, num_types,
+                tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
+                dt, args.goffset
+            )
+    except Exception:
+        # 如果warm-up失败，不阻止训练
+        logging.warning("仿真warm-up失败，继续训练（非致命）")
+
     # 开始训练
     total_batches = tf.data.experimental.cardinality(train_dataset).numpy()
     for epoch in range(args.epochs):
@@ -741,7 +758,8 @@ def main(args):
     if args.model == 0:
         # 模型0：MLP+CF端到端训练
         train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train, raw_train))
-        train_dataset = train_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
+        # 保持每个batch形状一致以减少tf.function retracing并降低编译开销
+        train_dataset = train_dataset.cache().batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
         
         val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val, raw_val))
         val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
@@ -755,7 +773,7 @@ def main(args):
     elif args.model == 1:
         # 模型1：MLP直接回归
         train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-        train_dataset = train_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
+        train_dataset = train_dataset.batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
         
         val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
         val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
@@ -773,7 +791,10 @@ def main(args):
 # ===================== 入口执行 =====================
 if __name__ == "__main__":
     # 启动TF性能分析
+    log_dir = "./profiler_records"
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
     tf.profiler.experimental.server.start(6009)
+    #tf.profiler.experimental.start(log_dir)
 
     # 命令行参数解析
     parser = argparse.ArgumentParser(description="使用Keras和交通仿真进行端到端模型训练")
@@ -794,10 +815,11 @@ if __name__ == "__main__":
     parser.add_argument('--fixdata', type=int, default=0, help='0(不修补),1(原始数据补),2(前后车偏移补)')
     parser.add_argument('--goffset', type=int, default=1, help='仿真全局偏移参数开关')
     parser.add_argument('--trainvalmode', type=int, default=0, help='0(无丢失),1(有丢失)')
-    parser.add_argument('--vehparamgrp', type=int, default=4, help='跟车模型参数类别数')
+   
 
     args = parser.parse_args()
     main(args)
 
     # 停止性能分析
+    #tf.profiler.experimental.stop()
     tf.profiler.experimental.server.stop()
