@@ -1,5 +1,4 @@
 import os
-import cv2
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -249,23 +248,25 @@ def simulate_single_sample(sample):
         s_opt = s0 + vel * T + vel * sqrt_vel / (2 * sqrt_ab)
         acc_idm = a_max * (1.0 - tf.pow(v_opt, delta) - tf.square(s_opt / (gap + 1e-6)))
 
-        # 红灯制动逻辑张量实现
+        # 基于固定距离，红灯制动逻辑张量实现，不管前车
         dist_to_red = intersection_pos_tf - pos
-        red_hold = (current_red_timer > 0) & (dist_to_red < 10.0)
-        red_acc = tf.zeros_like(vel)
+        redholddist_mask = (current_red_timer > 0) & (dist_to_red < 5.0)
+        red_acc_dist = tf.constant(-9.0, tf.float32)
 
-        # 向量化计算动态刹车减速度
+        # 融合1
+        acc = tf.where(redholddist_mask,red_acc_dist,acc_idm)
+
+        # 基于STOP_gap向量化计算动态刹车减速度,不管前车，慢慢停到红灯处,所以dynamic_brake肯定小于0
+        #加上acc = tf.minimum(red_acc_stopgap, acc)，导致acc错误
         d_remain = dist_to_red - stop_gap
-        mask_over = d_remain <= 0.1
-        mask_safe = d_remain > 0.1
+        stopgap_mask_over = (current_red_timer > 0) & (d_remain <= 0.1)
         d_safe = tf.maximum(d_remain, 0.01)
         dynamic_brake = -(tf.square(vel)) / (2 * d_safe)
         dynamic_brake = tf.clip_by_value(dynamic_brake, -b * 2.0, -0.1)
-        red_acc = tf.where(mask_over, tf.constant(-9.0, tf.float32), dynamic_brake)
-        red_acc = tf.where(~red_hold, tf.zeros_like(red_acc), red_acc)
-
-        # 融合加速度
-        acc = tf.where(red_hold, tf.minimum(acc_idm, red_acc), acc_idm)
+        red_acc_stopgap = tf.where(stopgap_mask_over, tf.constant(-9.0, tf.float32), dynamic_brake)
+        # 融合2
+        #acc = tf.minimum(red_acc_stopgap, acc)
+        
         acc = tf.clip_by_value(acc, -9.0, a_max)
 
         # 更新速度、位置（纯TF，无循环赋值acc[car_id]=0）
@@ -285,9 +286,12 @@ def simulate_single_sample(sample):
         acc_np = acc.numpy()
         pos_np = pos.numpy()
         vel_np = vel.numpy()
+        dist_to_red_np = dist_to_red.numpy()
+        gap_np = gap.numpy()
         logging.info(f"\n Step time={current_time.numpy():.2f}s")
         for vid in range(NUM_VEH):
             logging.info(f"vid{vid}--- pos={pos_np[vid]:.2f}, v={vel_np[vid]:.2f}, a={acc_np[vid]:.3f}")
+            logging.info(f"vid{vid}--- dist_to_red_np={dist_to_red[vid]:.2f}, gap_np={gap[vid]:.2f}")
 
     logging.info(f"Simulation finished, time range: 0~{max(sim_records.keys())}s")
     return sim_records, main_car_id, intersection_pos_tf.numpy(), car_cross_time
@@ -383,6 +387,7 @@ def main():
     logging.info("Simulation finished successfully")
 
 if __name__ == "__main__":
+    print("conda activate py39_tf215_gpu ")
     gpus = tf.config.list_physical_devices("GPU")
     if gpus:
         for gpu in gpus:
