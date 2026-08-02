@@ -9,12 +9,17 @@ def get_w99_params(scaled_params, vtypes):
     1: CC1 (期望车头时距 BX)
     2: CC2 (跟车变量，影响SDX)
     3: CC3 SDX 的速度衰减系数
-    4: CC4 (消极跟车阈值)
-    5: CC5 (积极跟车阈值)
+    4: CC4 (消极跟车阈值) 跟随阈值 / Following Threshold
+    5: CC5 (积极跟车阈值) 接近阈值 / Approaching Threshold)
     6: CC6 速度衰减系数（Speed Decay Coefficient），用于控制 SDV/OPDV 随车速变化的速率
     7: CC7 (加速度波动)
     8: CC8 (静止启动加速度)
     9: CC9 (80km/h加速度)
+
+        # --- 修正 CC4 和 CC5 ---
+    (-0.35, 0.35), # 4: CC4 (跟随阈值) [m/s] - 原始文献通常在此范围
+    (0.35, 0.65),  # 5: CC5 (接近阈值) [m/s] - 原始文献通常在此范围
+    
     """
     # 假设 scaled_params 维度为 (batch, num_types, 10)
     # 这里为了兼容旧接口，假设传入的是10维，或者从其他维度映射
@@ -109,8 +114,11 @@ def tf_wiedemann99_simulation(
         dv = tf.gather(dv_pad, inv_idx, batch_dims=1)
         
         # 2. 动态计算 SDV 和 SDX
+        #SDV 在这里代表的并不是“允许的最大相对速度”，而是触发减速的相对速度下限（或称“逼近感知阈值”）
+        #它的取值范围在 cc4 到 cc5 之间
         sdv = cc4 + (cc5 - cc4) * tf.exp(-vel_in / tf.maximum(cc6, 1e-5))
         sdx = cc0 + vel_in * (cc1 + (cc2 - cc1) * tf.exp(-vel_in / tf.maximum(cc3, 1e-5)))
+        sdx = tf.maximum(sdx, 1e-5)
 
         # A.0 检查是否触发减速条件: dv < SDV 且 gap < SDX
         is_approaching = tf.logical_and(dv < sdv, gap < sdx)
@@ -118,7 +126,7 @@ def tf_wiedemann99_simulation(
         # A.1计算减速加速度 (仅在触发条件下有效)
         #weight = tf.maximum(0.0, (sdx - gap) / tf.maximum(sdx, 1e-5))  # 车距权重项
         #raw_acc = -cc7 * (dv - sdv) * weight  # 原始公式
-        decel_acc = -tf.abs(cc7) * (dv - sdv) *tf.maximum(0.0, (sdx- gap)/sdx) # 简化的减速逻辑
+        decel_acc = -cc7* (sdv - dv) *tf.maximum(0.0, (sdx- gap)/sdx) # 简化的减速逻辑
         
 
   
