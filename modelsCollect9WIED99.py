@@ -18,7 +18,7 @@ from tensorflow.keras.optimizers import Adam, Adadelta, SGD, Adamax, RMSprop, Ad
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.model_selection import train_test_split
 from sklearn.cluster import KMeans
-
+#tf.debugging.enable_check_numerics() 
 # ===================== 本地模块导入 =====================
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from tf_wiedemann99_simulation import tf_wiedemann99_simulation
@@ -249,6 +249,39 @@ def build_simple_resnet(input_dim, output_dim, unit=256, layNum=8):
     model = Model(inputs=inp, outputs=out)
     return model
 
+def build_stable_resnet(input_dim, output_dim, unit=256, layNum=4):
+    """稳定的后激活残差网络，防止 NaN"""
+    def resnet_block(x, units):
+        shortcut = x
+        y = Dense(units, kernel_initializer='he_normal')(x)
+        y = BatchNormalization()(y)
+        y = ReLU()(y)
+        
+        y = Dense(units, kernel_initializer='he_normal')(y)
+        y = BatchNormalization()(y) # 注意：这里不加 ReLU，留给 Add 之后
+        
+        # 如果维度不匹配，用 1x1 卷积（这里用 Dense）对齐
+        if shortcut.shape[-1] != units:
+            shortcut = Dense(units, kernel_initializer='he_normal')(shortcut)
+            shortcut = BatchNormalization()(shortcut) # shortcut 也过 BN
+            
+        y = Add()([shortcut, y])
+        y = ReLU()(y) # 后激活
+        return y
+
+    inp = Input(shape=(input_dim,))
+    x = Dense(unit, kernel_initializer='he_normal')(inp)
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+
+    for _ in range(layNum):
+        x = resnet_block(x, unit)
+
+    # 输出层
+    out = Dense(output_dim, activation='sigmoid')(x)
+    model = Model(inputs=inp, outputs=out)
+    return model
+
 def build_simple_resnet2(input_dim, output_dim, unit=256, layNum=8):
     """带Dropout预激活残差块，防过拟合，用于IDM参数解码"""
     def resnet_block(x, units, dropout_rate=0.2):
@@ -367,6 +400,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
 
     # 构建模型
     model = build_simple_resnet2(X_train.shape[1], output_dim, args.unit, args.layNum)
+    #model = build_stable_resnet(X_train.shape[1], output_dim, args.unit, args.layNum)
+
     param_bounds = get_param_bounds(num_types)
     
     # 优化器配置
@@ -374,6 +409,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         args.lr, decay_steps=100, decay_rate=0.99, staircase=True
     )
     optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
+    optimizer = Adam(learning_rate=args.lr, clipnorm=1.0)
 
 
 
@@ -396,36 +432,51 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         """训练步（TF函数装饰，减少重追踪）"""
         with tf.GradientTape() as tape:
             nn_output = model(x_batch, training=True)
-            # 仿真封装
-            #def sim_wrapper(nn_out, raw):
-            #    return tf_idm_simulation(
-            #        nn_out, raw, param_bounds, num_types, 
-            #        tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
-            #        dt=dt, go_flag=args.goffset
-            #    )
-            #predicted_times = tf.py_function(
-            #    sim_wrapper, [nn_output, raw_batch], Tout=tf.float32
-            #)
+            nn_output = tf.clip_by_value(nn_output, clip_value_min=0.01, clip_value_max=0.99) 
+            # 1. 检查是否有 NaN 或 Inf (如果有，说明前向传播就炸了)
+            has_nan = tf.reduce_any(tf.math.is_nan(nn_output))
+            has_inf = tf.reduce_any(tf.math.is_inf(nn_output))
+            #tf.print("debug:nn_output 包含 NaN:", has_nan, " | 包含 Inf:", has_inf)
 
+            # 2. 打印形状、均值、方差和前3个样本的输出，避免刷屏
+            #tf.print("debug:nn_output 形状:", tf.shape(nn_output), " | 均值:", tf.reduce_mean(nn_output)," | 方差:", tf.math.reduce_variance(nn_output))
+            #tf.print("debug:前3个样本输出:\n", nn_output[:3])
+
+ 
             predicted_times = tf_wiedemann99_simulation(
                     nn_output, raw_batch, param_bounds, num_types,
                     tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
                     dt, args.goffset
                     )
-            
+            is_finite = tf.reduce_all(tf.math.is_finite(predicted_times))
+            # 若存在 NaN/Inf，则用当前 batch 的均值（或固定常数）替代，避免梯度污染
+            predicted_times = tf.cond(
+                is_finite,
+                lambda: predicted_times,
+                lambda: tf.zeros_like(predicted_times)  # 或使用 tf.ones * 某个合理值
+                )
             # 形状调整
             batch_size = tf.shape(y_batch)[0]
             predicted_times = tf.reshape(predicted_times, [batch_size])
             y_batch = tf.reshape(y_batch, [batch_size])
             loss = tf.reduce_mean(tf.square(predicted_times - y_batch))
+            #loss = tf.reduce_mean(tf.keras.losses.huber(y_batch, predicted_times, delta=1.0))
+
+            #tf.print("DEBUG Pred Mean:", tf.reduce_mean(predicted_times), 
+            #    "Pred Var:", tf.math.reduce_variance(predicted_times),
+            #   "Target Mean:", tf.reduce_mean(y_batch))
+
 
         # 梯度裁剪与更新
         grads = tape.gradient(loss, model.trainable_variables)
+        grads, _ = tf.clip_by_global_norm(grads, 1.0)  # 全局范数裁剪更稳定
+        grads = [tf.where(tf.math.is_finite(g), g, tf.zeros_like(g)) for g in grads]
         clipped_grads = [
             tf.clip_by_norm(g, 1.0) if g is not None else g 
             for g in grads
         ]
-        optimizer.apply_gradients(zip(clipped_grads, model.trainable_variables))
+        #optimizer.apply_gradients(zip(clipped_grads, model.trainable_variables))
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
         return loss
 
     @tf.function(reduce_retracing=True)
@@ -443,22 +494,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         y_batch = tf.reshape(y_batch, [batch_size])
         return predicted_times - y_batch
 
-    # 在训练前做一次仿真函数的warm-up以触发tf.function编译，避免首个训练batch出现长时间编译延迟
-    try:
-        warm_batch_size = min(args.batch_size, X_train.shape[0])
-        if warm_batch_size > 0:
-            # 构造伪网络输出和原始数据的切片进行一次调用
-            dummy_nn = tf.zeros((warm_batch_size, (num_types + 1) * 6), dtype=tf.float32)
-            dummy_raw = tf.convert_to_tensor(raw_train[:warm_batch_size], dtype=tf.float32)
-            # 调用一次以触发tf.function的编译/缓存
-            _ = tf_wiedemann99_simulation(
-                dummy_nn, dummy_raw, param_bounds, num_types,
-                tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
-                dt, args.goffset
-            )
-    except Exception:
-        # 如果warm-up失败，不阻止训练
-        logging.warning("仿真warm-up失败，继续训练（非致命）")
+
 
     # 开始训练
     total_batches = tf.data.experimental.cardinality(train_dataset).numpy()
@@ -468,6 +504,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         batch_idx = 0
 
         for x_batch, y_batch, raw_batch in train_dataset:
+            #tf.debugging.assert_all_finite(x_batch, message="x_batch 输入数据包含 NaN 或 Inf!")
+            
             batch_idx += 1
             t0 = time.time()
             loss = train_step(x_batch, y_batch, raw_batch)
@@ -778,6 +816,16 @@ def main(args):
     y = (df_fixed['time_to_vanish'].values / 30.0).astype(np.float32)
     raw_data_for_sim = df_fixed[raw_cols].values.astype(np.float32)
 
+
+    # 1. 生成掩码：X 的所有特征有限 且 y 有限
+    mask = np.isfinite(X).all(axis=1) & np.isfinite(y)
+
+    # 2. 打印清理结果
+    print(f"清理完成：删除了 {(~mask).sum()} 条包含 NaN/Inf 的脏数据")
+
+    # 3. 应用掩码过滤（同步过滤三个数组，保持维度一致）
+    X, y, raw_data_for_sim = X[mask], y[mask], raw_data_for_sim[mask]
+
     # 划分训练验证集
     X_train, X_val, y_train, y_val, raw_train, raw_val = train_test_split(
         X, y, raw_data_for_sim, 
@@ -841,7 +889,7 @@ if __name__ == "__main__":
                         help='训练数据CSV文件路径')
     parser.add_argument('--epochs', type=int, default=10, help='训练轮数')
     parser.add_argument('--batch_size', type=int, default=8, help='批处理大小')
-    parser.add_argument('--lr', type=float, default=0.001, help='学习率')
+    parser.add_argument('--lr', type=float, default=0.0001, help='学习率')
     parser.add_argument('--test_size', type=float, default=0.9, help='验证集比例')
     parser.add_argument('--num_types', type=int, default=4, help='车辆类别数')
     parser.add_argument('--unit', type=int, default=128, help='ResNet隐藏层单元数')

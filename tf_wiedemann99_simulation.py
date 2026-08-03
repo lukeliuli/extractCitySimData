@@ -55,7 +55,19 @@ def tf_wiedemann99_simulation(
     bounds = tf.convert_to_tensor(param_bounds, dtype=tf.float32)
     low, high = bounds[..., 0], bounds[..., 1]
     real_params = low + scaled_params * (high - low)
+
+    safe_low = tf.constant([0.5, 0.5, 0.1, 1.0, -0.35, 0.0, 10.0, 0.1, 1.0, 0.5], dtype=tf.float32)
+    safe_high = tf.constant([2.5, 2.5, 0.6, 8.0, 0.0, 0.35, 20.0, 0.5, 3.0, 1.5], dtype=tf.float32)
+    real_params = tf.clip_by_value(real_params, safe_low, safe_high)
+
+ # --- 修正版调试代码 START ---
+    batch_size = tf.shape(real_params)[0]  # 动态获取batch大小
     
+   
+    # 正确提取每列参数（关键修复：real_params[:, i] 而非整个矩阵）
+    tf.print("debug:Wiedemann99 参数 real_param[0,0,:]:\n", real_params[0,0,:], summarize=-1)  # 跟车时距
+  
+    # --- 修正版调试代码 END -
     # 偏移量处理 (与FVDM一致)
     offsets = [scene_offset_full[:, i] for i in range(6)]
     offset_scales = [2.0, 8.0, 2.0, 2.0, 2.0, 2.0]
@@ -65,7 +77,7 @@ def tf_wiedemann99_simulation(
         offset = (shift + offset * 2.0) * scale if shift != 0 else offset * scale
         offset = tf.cond(tf.equal(go_flag, 1), lambda: offset, lambda: tf.zeros_like(offset))
         processed_offsets.append(offset)
-    (redlighttime_offset, _, vehpos_offset, redlightpos_offset, vanishtime_offset, _) = processed_offsets
+    (redlighttime_offset, _, _, redlightpos_offset, vanishtime_offset, _) = processed_offsets
 
     # 2. 数据提取与初始化
     car_positions = tf.gather(raw_data_batch, pos_idx, axis=1)
@@ -79,7 +91,7 @@ def tf_wiedemann99_simulation(
     car_positions = tf.where(mask_invalid, rand_neg_pos, car_positions)
     init_vanished = mask_invalid
     
-    car_positions += vehpos_offset[:, None]
+    #car_positions += vehpos_offset[:, None]
     inter_pos += redlightpos_offset
     red_dur_sec += redlighttime_offset
     main_idx = tf.argmin(tf.abs(car_positions - main_pos[:, None]), axis=1)
@@ -194,5 +206,5 @@ def tf_wiedemann99_simulation(
     
     # 7. 输出
     main_vanish_time = tf.gather(time_counter, main_idx[:, None], batch_dims=1)
-    main_vanish_time = tf.squeeze(main_vanish_time, axis=1) + vanishtime_offset
+    #main_vanish_time = tf.squeeze(main_vanish_time, axis=1) + vanishtime_offset
     return main_vanish_time
