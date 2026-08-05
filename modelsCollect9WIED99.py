@@ -448,6 +448,12 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                     tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
                     dt, args.goffset
                     )
+           
+            
+            # 2. 对预测值取对数
+            safe_predicted_times = tf.maximum(predicted_times, 1e-7)
+            predicted_times = tf.math.log(safe_predicted_times)
+
             is_finite = tf.reduce_all(tf.math.is_finite(predicted_times))
             # 若存在 NaN/Inf，则用当前 batch 的均值（或固定常数）替代，避免梯度污染
             predicted_times = tf.cond(
@@ -477,7 +483,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         ]
         #optimizer.apply_gradients(zip(clipped_grads, model.trainable_variables))
         optimizer.apply_gradients(zip(grads, model.trainable_variables))
-        return loss
+        return loss,predicted_times
 
     @tf.function(reduce_retracing=True)
     def val_step(x_batch, y_batch, raw_batch):
@@ -491,8 +497,12 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         # 形状调整
         batch_size = tf.shape(y_batch)[0]
         predicted_times = tf.reshape(predicted_times, [batch_size])
+        #对预测值取对数
+        safe_predicted_times = tf.maximum(predicted_times, 1e-7)
+        predicted_times = tf.math.log(safe_predicted_times)
+        
         y_batch = tf.reshape(y_batch, [batch_size])
-        return predicted_times - y_batch
+        return predicted_times - y_batch,predicted_times
 
 
 
@@ -503,12 +513,14 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         epoch_loss_avg = tf.keras.metrics.Mean()
         batch_idx = 0
 
+        val_trues = []
+        val_preds = []
         for x_batch, y_batch, raw_batch in train_dataset:
             #tf.debugging.assert_all_finite(x_batch, message="x_batch 输入数据包含 NaN 或 Inf!")
             
             batch_idx += 1
             t0 = time.time()
-            loss = train_step(x_batch, y_batch, raw_batch)
+            loss,pred_y = train_step(x_batch, y_batch, raw_batch)
             t1 = time.time()
             
             epoch_loss_avg.update_state(loss)
@@ -518,31 +530,84 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 f"| Time: {t1-t0:.2f}s | Remain: {rem_batches}"
             )
 
+            val_trues.append(y_batch.numpy())
+            val_preds.append(pred_y.numpy())
+
+      
+
+
         # _epoch平均损失
         epoch_loss = epoch_loss_avg.result().numpy()
         logging.info(f"Epoch {epoch+1} Average Loss: {epoch_loss:.4f}")
 
-        # 验证逻辑
+        # 实际时间空间,计算验证指标
+        val_preds_log = np.concatenate([p.flatten() for p in val_preds])
+        val_trues_log = np.concatenate([t.flatten() for t in val_trues])
+
+        val_preds_real = np.exp(val_preds_log)
+        val_trues_real = np.exp(val_trues_log)
+        # 在【实际时间空间】下计算物理指标
+        val_errs_real = val_preds_real - val_trues_real
+        val_mse = np.mean(np.square(val_errs_real))
+        val_rmse = np.sqrt(val_mse)
+        val_mae = np.mean(np.abs(val_errs_real))
+
+        logging.info(
+            f"Trainning Results (Real Time) - MSE: {val_mse:.4f}, "
+            f"RMSE: {val_rmse:.4f}, MAE: {val_mae:.4f}")
+
+        #--------------------------------------------- 验证逻辑
         if epoch % 5 == 4 or epoch == args.epochs - 1:
             logging.info("===== 验证阶段开始 =====")
             val_errs = []
             val_loss_metric = tf.keras.metrics.Mean()
-
+            
+            val_trues = []
+            val_preds = []
             for xb, yb, rb in val_dataset:
-                errs = val_step(xb, yb, rb)
+                errs,pred_y = val_step(xb, yb, rb)
                 enp = errs.numpy()
                 val_errs.append(enp)
                 val_loss_metric.update_state(np.mean(np.square(enp)))
+
+                # 收集对数空间下的真实值和预测值，用于后续还原
+                # 注意：这里假设 yb 是 log_true，errs = log_pred - log_true
+                # 所以 log_pred = errs + yb
+                val_trues.append(yb.numpy())
+                val_preds.append(pred_y.numpy())
+                
+                # 在对数空间下计算 Loss
+                val_loss_metric.update_state(np.mean(np.square(errs.numpy())))
+
 
             # 计算验证指标
             val_errs = np.concatenate([e.flatten() for e in val_errs])
             val_rmse = np.sqrt(np.mean(np.square(val_errs)))
             val_mae = np.mean(np.abs(val_errs))
+
+
+            
             
             logging.info(
                 f"Validation Results - RMSE: {val_rmse:.4f}, "
                 f"MAE: {val_mae:.4f}, MSE: {val_loss_metric.result().numpy():.4f}"
             )
+
+             # 实际时间空间,计算验证指标
+            val_preds_log = np.concatenate([p.flatten() for p in val_preds])
+            val_trues_log = np.concatenate([t.flatten() for t in val_trues])
+             
+            val_preds_real = np.exp(val_preds_log)
+            val_trues_real = np.exp(val_trues_log)
+             # 在【实际时间空间】下计算物理指标
+            val_errs_real = val_preds_real - val_trues_real
+            val_mse = np.mean(np.square(val_errs_real))
+            val_rmse = np.sqrt(val_mse)
+            val_mae = np.mean(np.abs(val_errs_real))
+            
+            logging.info(
+                f"Validation Results (Real Time) - MSE: {val_mse:.4f}, "
+                f"RMSE: {val_rmse:.4f}, MAE: {val_mae:.4f}")
 
     # 模型保存
     make_dir_safe(DIR_TMP_MODEL)
@@ -730,6 +795,8 @@ def main(args):
         'car_speed': 'main_car_speed'
     }, inplace=True)
 
+
+
     # ===================== 2. 生成缺失数据样本 =====================
     logger.info("生成缺失车辆样本...")
     # 生成不同数量丢失车辆的样本
@@ -816,7 +883,9 @@ def main(args):
     y = (df_fixed['time_to_vanish'].values / 30.0).astype(np.float32)
     raw_data_for_sim = df_fixed[raw_cols].values.astype(np.float32)
 
+    y = np.log(y) #注意y对数化了---------------------------------------------------------------------这里y对数化了
 
+    
     # 1. 生成掩码：X 的所有特征有限 且 y 有限
     mask = np.isfinite(X).all(axis=1) & np.isfinite(y)
 
@@ -844,6 +913,7 @@ def main(args):
 
     if args.model == 0:
         # 模型0：MLP+CF端到端训练
+        
         train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train, raw_train))
         # 保持每个batch形状一致以减少tf.function retracing并降低编译开销
         train_dataset = train_dataset.cache().batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
