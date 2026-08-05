@@ -65,7 +65,12 @@ def tf_wiedemann99_simulation(
     
    
     # 正确提取每列参数（关键修复：real_params[:, i] 而非整个矩阵）
-    tf.print("debug:Wiedemann99 参数 real_param[0,0,:]:\n", real_params[0,0,:], summarize=-1)  # 跟车时距
+    #tf.print("debug:Wiedemann99 参数 real_param[0,0,:]:\n", real_params[0,0,:], summarize=-1)  # 跟车时距
+    formatted_params = tf.strings.format("%.3f", real_params[0,0,:])
+
+    # 3. 使用 tf.print 打印结果
+    # join 将字符串列表合并为一个由空格分隔的字符串
+    tf.print("debug:Wiedemann99 参数 real_param[0,0,:]:", tf.strings.reduce_join(formatted_params, separator=" "))`
   
     # --- 修正版调试代码 END -
     # 偏移量处理 (与FVDM一致)

@@ -381,6 +381,7 @@ def rmse(y_true, y_pred):
     return tf.sqrt(tf.reduce_mean(tf.square(y_true - y_pred)))
 
 # ===================== 模型0训练：Wiedemann 99 仿真嵌套端到端训练 =====================
+
 def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt):
     """
     MLP+Wiedemann 99 参数端到端训练
@@ -465,6 +466,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             batch_size = tf.shape(y_batch)[0]
             predicted_times = tf.reshape(predicted_times, [batch_size])
             y_batch = tf.reshape(y_batch, [batch_size])
+
+
             loss = tf.reduce_mean(tf.square(predicted_times - y_batch))
             #loss = tf.reduce_mean(tf.keras.losses.huber(y_batch, predicted_times, delta=1.0))
 
@@ -473,17 +476,17 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             #   "Target Mean:", tf.reduce_mean(y_batch))
 
 
-        # 梯度裁剪与更新
-        grads = tape.gradient(loss, model.trainable_variables)
-        grads, _ = tf.clip_by_global_norm(grads, 1.0)  # 全局范数裁剪更稳定
-        grads = [tf.where(tf.math.is_finite(g), g, tf.zeros_like(g)) for g in grads]
-        clipped_grads = [
-            tf.clip_by_norm(g, 1.0) if g is not None else g 
-            for g in grads
-        ]
-        #optimizer.apply_gradients(zip(clipped_grads, model.trainable_variables))
-        optimizer.apply_gradients(zip(grads, model.trainable_variables))
-        return loss,predicted_times
+            # 梯度裁剪与更新
+            grads = tape.gradient(loss, model.trainable_variables)
+            grads, _ = tf.clip_by_global_norm(grads, 1.0)  # 全局范数裁剪更稳定
+            grads = [tf.where(tf.math.is_finite(g), g, tf.zeros_like(g)) for g in grads]
+            clipped_grads = [
+                tf.clip_by_norm(g, 1.0) if g is not None else g 
+                for g in grads
+            ]
+            #optimizer.apply_gradients(zip(clipped_grads, model.trainable_variables))
+            optimizer.apply_gradients(zip(grads, model.trainable_variables))
+            return loss,predicted_times
 
     @tf.function(reduce_retracing=True)
     def val_step(x_batch, y_batch, raw_batch):
