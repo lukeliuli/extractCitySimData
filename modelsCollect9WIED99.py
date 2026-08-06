@@ -81,6 +81,19 @@ BASE_BOUND_VEHICLE = [
     (0.5, 1.5)    # 9: CC9 (高速加速度) [m/s²]
 ]
 
+BASE_BOUND_VEHICLE = [
+    (1.0, 3.0),   # 0: CC0 (停车间距) [m]
+    (0.5, 3.0),   # 1: CC1 (车头时距) [s]
+    (0.1, 0.6),   # 2: CC2 (跟车变量) [m/s²]
+    (2.0, 9.0),   # 3: CC3 (进入跟车阈值) [s]
+    (-0.55, 0.0), # 4: CC4 (负的相对速度阈值) [m/s]
+    (0.0, 0.55),  # 5: CC5 (正的相对速度阈值) [m/s]
+    (10.0,20.0), # 6: CC6 (速度依赖性)
+    (0.1, 0.5),   # 7: CC7 (加速度波动) [m/s²]
+    (1.0, 3.0),   # 8: CC8 (启动加速度) [m/s²]
+    (0.5, 2.5)    # 9: CC9 (高速加速度) [m/s²]
+]
+
 # 保存目录常量
 DIR_TMP_MODEL = "./tmpModes"
 DIR_EVAL_MODEL0 = "./evaluation_results_model0"
@@ -411,6 +424,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     )
     optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
     optimizer = Adam(learning_rate=args.lr, clipnorm=1.0)
+    optimizer = AdamW(learning_rate=args.lr, weight_decay=1e-5)
 
 
 
@@ -574,8 +588,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 val_loss_metric.update_state(np.mean(np.square(enp)))
 
                 # 收集对数空间下的真实值和预测值，用于后续还原
-                # 注意：这里假设 yb 是 log_true，errs = log_pred - log_true
-                # 所以 log_pred = errs + yb
+
                 val_trues.append(yb.numpy())
                 val_preds.append(pred_y.numpy())
                 
