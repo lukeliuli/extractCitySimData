@@ -1,0 +1,1 @@
+python modelsCollect9IW99.py --batch_size 300 --test_size 0.85 --epochs 250 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 5000 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1
