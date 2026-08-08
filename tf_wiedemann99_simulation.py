@@ -56,8 +56,8 @@ def tf_wiedemann99_simulation(
     low, high = bounds[..., 0], bounds[..., 1]
     real_params = low + scaled_params * (high - low)
 
-    safe_low = tf.constant([0.5, 0.5, 0.1, 1.0, -0.35, 0.0, 10.0, 0.1, 1.0, 0.5], dtype=tf.float32)
-    safe_high = tf.constant([2.5, 2.5, 0.6, 8.0, 0.0, 0.35, 20.0, 0.5, 3.0, 1.5], dtype=tf.float32)
+    safe_low = low
+    safe_high = high
     real_params = tf.clip_by_value(real_params, safe_low, safe_high)
 
  # --- 修正版调试代码 START ---
@@ -65,7 +65,7 @@ def tf_wiedemann99_simulation(
     
    
     # 正确提取每列参数（关键修复：real_params[:, i] 而非整个矩阵）
-    tf.print("-- real_param[0,0,:]:", real_params[0,0,:], summarize=-1)  # 跟车时距
+    tf.print("---------- real_param[0,0,:]:", real_params[0,0,:], summarize=-1)  # 跟车时距
 
   
     # --- 修正版调试代码 END -

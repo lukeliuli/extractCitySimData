@@ -80,7 +80,7 @@ BASE_BOUND_VEHICLE = [
     (1.0, 3.0),   # 8: CC8 (启动加速度) [m/s²]
     (0.5, 1.5)    # 9: CC9 (高速加速度) [m/s²]
 ]
-
+'''
 BASE_BOUND_VEHICLE = [
     (1.0, 3.0),   # 0: CC0 (停车间距) [m]
     (0.5, 3.0),   # 1: CC1 (车头时距) [s]
@@ -93,7 +93,7 @@ BASE_BOUND_VEHICLE = [
     (1.0, 3.0),   # 8: CC8 (启动加速度) [m/s²]
     (0.5, 2.5)    # 9: CC9 (高速加速度) [m/s²]
 ]
-
+'''
 # 保存目录常量
 DIR_TMP_MODEL = "./tmpModes"
 DIR_EVAL_MODEL0 = "./evaluation_results_model0"
@@ -420,11 +420,32 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     
     # 优化器配置
     lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        args.lr, decay_steps=100, decay_rate=0.99, staircase=True
+        args.lr, decay_steps=200, decay_rate=0.99, staircase=True
     )
-    optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
-    optimizer = Adam(learning_rate=args.lr, clipnorm=1.0)
-    optimizer = AdamW(learning_rate=args.lr, weight_decay=1e-5)
+    #optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
+    #optimizer = Adam(learning_rate=args.lr, clipnorm=1.0)
+    optimizer = AdamW(learning_rate=args.lr, weight_decay=1e-5,clipnorm=1.0)
+    optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5,clipnorm=1.0)
+
+
+    # 替换原有的 AdamW
+    initial_lr = args.lr * 50  # SGD 一般需要比 Adam 大 10~100 倍，如 0.005 ~ 0.01
+    momentum = 0.9
+    weight_decay = 1e-4
+
+    # 余弦退火调度（每轮 epoch 调整）
+    cosine_schedule = tf.keras.optimizers.schedules.CosineDecay(
+        initial_learning_rate=initial_lr,
+        decay_steps=args.epochs  # 总 epoch 数作为周期
+    )
+
+    cosine_decay = tf.keras.optimizers.schedules.CosineDecayRestarts(
+        initial_learning_rate=initial_lr,
+        first_decay_steps=args.epochs // 4,  # 每 1/4 总轮次重启一次
+        t_mul=2.0, m_mul=0.5, alpha=0.0)
+
+    optimizer = SGD(learning_rate=cosine_schedule, momentum=momentum, weight_decay=weight_decay, nesterov=True)
+
 
 
 
@@ -492,12 +513,12 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
 
             # 梯度裁剪与更新
             grads = tape.gradient(loss, model.trainable_variables)
-            grads, _ = tf.clip_by_global_norm(grads, 1.0)  # 全局范数裁剪更稳定
+            #grads, _ = tf.clip_by_global_norm(grads, 1.0)  # 全局范数裁剪更稳定
             grads = [tf.where(tf.math.is_finite(g), g, tf.zeros_like(g)) for g in grads]
-            clipped_grads = [
-                tf.clip_by_norm(g, 1.0) if g is not None else g 
-                for g in grads
-            ]
+            #clipped_grads = [
+            #    tf.clip_by_norm(g, 1.0) if g is not None else g 
+            #    for g in grads
+            #]
             #optimizer.apply_gradients(zip(clipped_grads, model.trainable_variables))
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
             return loss,predicted_times
