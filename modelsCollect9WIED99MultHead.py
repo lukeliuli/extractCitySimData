@@ -1,3 +1,6 @@
+#修改代码1.增加函数build_simple_resnet3 类似build_simple_resnet2，功能上实现多头多任务处理，同时实现同一个函数，
+#输出多头：(1)回归预测vanishTime,(2)resnet+cf 预测vanishTime (3) 识别是否有车辆漏检以及相应的概率 （4)分析车辆的最小速度以及各个不同的置信区间
+
 # ===================== 系统库导入 =====================
 import time
 import os
@@ -610,7 +613,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
 
                 # 收集对数空间下的真实值和预测值，用于后续还原
 
-                c
+                val_trues.append(yb.numpy())
+                val_preds.append(pred_y.numpy())
                 
                 # 在对数空间下计算 Loss
                 val_loss_metric.update_state(np.mean(np.square(errs.numpy())))
@@ -728,6 +732,266 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
 
     return model_vanish_reg
 
+##---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt):
+    """
+    MLP+Wiedemann 99 参数端到端训练
+    :param X_train: 训练特征
+    :param y_train: 训练标签
+    :param raw_train: 原始训练数据
+    :param train_dataset: 训练数据集
+    :param val_dataset: 验证数据集
+    :param raw_cols: 原始数据列名
+    :param args: 命令行参数
+    :param dt: 仿真时间步长
+    :return: 训练好的模型
+    """
+    num_types = args.num_types
+    num_types2 = num_types + 1
+    output_dim = num_types2 * 10  # W99需要10个参数
+
+    # 构建模型
+    model = build_simple_resnet2(X_train.shape[1], output_dim, args.unit, args.layNum)
+    #model = build_stable_resnet(X_train.shape[1], output_dim, args.unit, args.layNum)
+
+    param_bounds = get_param_bounds(num_types)
+    
+    # 优化器配置
+    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        args.lr, decay_steps=200, decay_rate=0.99, staircase=True
+    )
+    #optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
+    #optimizer = Adam(learning_rate=args.lr, clipnorm=1.0)
+    optimizer = AdamW(learning_rate=args.lr, weight_decay=1e-5,clipnorm=1.0)
+    optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5,clipnorm=1.0)
+
+
+    # 替换原有的 AdamW
+    initial_lr = args.lr * 50  # SGD 一般需要比 Adam 大 10~100 倍，如 0.005 ~ 0.01
+    momentum = 0.9
+    weight_decay = 1e-4
+
+    # 余弦退火调度（每轮 epoch 调整）
+    cosine_schedule = tf.keras.optimizers.schedules.CosineDecay(
+        initial_learning_rate=initial_lr,
+        decay_steps=args.epochs  # 总 epoch 数作为周期
+    )
+
+    cosine_decay = tf.keras.optimizers.schedules.CosineDecayRestarts(
+        initial_learning_rate=initial_lr,
+        first_decay_steps=args.epochs // 4,  # 每 1/4 总轮次重启一次
+        t_mul=2.0, m_mul=0.5, alpha=0.0)
+
+    optimizer = SGD(learning_rate=cosine_schedule, momentum=momentum, weight_decay=weight_decay, nesterov=True)
+
+
+
+
+    pos_idx_list = [i for i, c in enumerate(raw_cols) if c.startswith("car_position_")]
+    speed_idx_list = [i for i, c in enumerate(raw_cols) if c.startswith("car_speed_")]
+    idx_main_car = raw_cols.index("main_car_position")
+    idx_inter = raw_cols.index("intersection_pos")
+    idx_red = raw_cols.index("redLightRemainingTime")
+
+    # 转为静态int张量，闭包捕获传入sim_wrapper
+    tf_pos_idx = tf.constant(pos_idx_list, dtype=tf.int32)
+    tf_speed_idx = tf.constant(speed_idx_list, dtype=tf.int32)
+    tf_idx_main = tf.constant(idx_main_car, dtype=tf.int32)
+    tf_idx_inter = tf.constant(idx_inter, dtype=tf.int32)
+    tf_idx_red = tf.constant(idx_red, dtype=tf.int32)
+
+
+    @tf.function(reduce_retracing=True)
+    def train_step(x_batch, y_batch, raw_batch):
+        """训练步（TF函数装饰，减少重追踪）"""
+        with tf.GradientTape() as tape:
+            nn_output = model(x_batch, training=True)
+            nn_output = tf.clip_by_value(nn_output, clip_value_min=0.01, clip_value_max=0.99) 
+            # 1. 检查是否有 NaN 或 Inf (如果有，说明前向传播就炸了)
+            has_nan = tf.reduce_any(tf.math.is_nan(nn_output))
+            has_inf = tf.reduce_any(tf.math.is_inf(nn_output))
+            #tf.print("debug:nn_output 包含 NaN:", has_nan, " | 包含 Inf:", has_inf)
+
+            # 2. 打印形状、均值、方差和前3个样本的输出，避免刷屏
+            #tf.print("debug:nn_output 形状:", tf.shape(nn_output), " | 均值:", tf.reduce_mean(nn_output)," | 方差:", tf.math.reduce_variance(nn_output))
+            #tf.print("debug:前3个样本输出:\n", nn_output[:3])
+
+ 
+            predicted_times = tf_wiedemann99_simulation(
+                    nn_output, raw_batch, param_bounds, num_types,
+                    tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
+                    dt, args.goffset
+                    )
+           
+            
+            # 2. 对预测值取对数
+            safe_predicted_times = tf.maximum(predicted_times, 1e-7)
+            predicted_times = tf.math.log(safe_predicted_times)
+
+            is_finite = tf.reduce_all(tf.math.is_finite(predicted_times))
+            # 若存在 NaN/Inf，则用当前 batch 的均值（或固定常数）替代，避免梯度污染
+            predicted_times = tf.cond(
+                is_finite,
+                lambda: predicted_times,
+                lambda: tf.zeros_like(predicted_times)  # 或使用 tf.ones * 某个合理值
+                )
+            # 形状调整
+            batch_size = tf.shape(y_batch)[0]
+            predicted_times = tf.reshape(predicted_times, [batch_size])
+            y_batch = tf.reshape(y_batch, [batch_size])
+
+
+            loss = tf.reduce_mean(tf.square(predicted_times - y_batch))
+            #loss = tf.reduce_mean(tf.keras.losses.huber(y_batch, predicted_times, delta=1.0))
+
+            #tf.print("DEBUG Pred Mean:", tf.reduce_mean(predicted_times), 
+            #    "Pred Var:", tf.math.reduce_variance(predicted_times),
+            #   "Target Mean:", tf.reduce_mean(y_batch))
+
+
+            # 梯度裁剪与更新
+            grads = tape.gradient(loss, model.trainable_variables)
+            #grads, _ = tf.clip_by_global_norm(grads, 1.0)  # 全局范数裁剪更稳定
+            grads = [tf.where(tf.math.is_finite(g), g, tf.zeros_like(g)) for g in grads]
+            #clipped_grads = [
+            #    tf.clip_by_norm(g, 1.0) if g is not None else g 
+            #    for g in grads
+            #]
+            #optimizer.apply_gradients(zip(clipped_grads, model.trainable_variables))
+            optimizer.apply_gradients(zip(grads, model.trainable_variables))
+            return loss,predicted_times
+
+    @tf.function(reduce_retracing=True)
+    def val_step(x_batch, y_batch, raw_batch):
+        """验证步（TF函数装饰，减少重追踪）"""
+        nn_output = model(x_batch, training=False)
+        predicted_times = tf_wiedemann99_simulation(
+                nn_output, raw_batch, param_bounds, num_types,
+                tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
+                dt, args.goffset
+                )
+        # 形状调整
+        batch_size = tf.shape(y_batch)[0]
+        predicted_times = tf.reshape(predicted_times, [batch_size])
+        #对预测值取对数
+        safe_predicted_times = tf.maximum(predicted_times, 1e-7)
+        predicted_times = tf.math.log(safe_predicted_times)
+        
+        y_batch = tf.reshape(y_batch, [batch_size])
+        return predicted_times - y_batch,predicted_times
+
+
+
+    # 开始训练
+    total_batches = tf.data.experimental.cardinality(train_dataset).numpy()
+    for epoch in range(args.epochs):
+        logging.info(f"===== Epoch {epoch + 1}/{args.epochs} =====")
+        epoch_loss_avg = tf.keras.metrics.Mean()
+        batch_idx = 0
+
+        val_trues = []
+        val_preds = []
+        for x_batch, y_batch, raw_batch in train_dataset:
+            #tf.debugging.assert_all_finite(x_batch, message="x_batch 输入数据包含 NaN 或 Inf!")
+            
+            batch_idx += 1
+            t0 = time.time()
+            loss,pred_y = train_step(x_batch, y_batch, raw_batch)
+            t1 = time.time()
+            
+            epoch_loss_avg.update_state(loss)
+            rem_batches = total_batches - batch_idx
+            logging.info(
+                f"Batch {batch_idx}/{total_batches} | Loss: {loss.numpy():.4f} "
+                f"| Time: {t1-t0:.2f}s | Remain: {rem_batches}"
+            )
+
+            val_trues.append(y_batch.numpy())
+            val_preds.append(pred_y.numpy())
+
+      
+
+
+        # _epoch平均损失
+        epoch_loss = epoch_loss_avg.result().numpy()
+        logging.info(f"Epoch {epoch+1} Average Loss: {epoch_loss:.4f}")
+
+        # 实际时间空间,计算验证指标
+        val_preds_log = np.concatenate([p.flatten() for p in val_preds])
+        val_trues_log = np.concatenate([t.flatten() for t in val_trues])
+
+        val_preds_real = np.exp(val_preds_log)
+        val_trues_real = np.exp(val_trues_log)
+        # 在【实际时间空间】下计算物理指标
+        val_errs_real = val_preds_real - val_trues_real
+        val_mse = np.mean(np.square(val_errs_real))
+        val_rmse = np.sqrt(val_mse)
+        val_mae = np.mean(np.abs(val_errs_real))
+
+        logging.info(
+            f"Trainning Results (Real Time) - MSE: {val_mse:.4f}, "
+            f"RMSE: {val_rmse:.4f}, MAE: {val_mae:.4f}")
+
+        #--------------------------------------------- 验证逻辑
+        if epoch % 5 == 4 or epoch == args.epochs - 1:
+            logging.info("===== 验证阶段开始 =====")
+            val_errs = []
+            val_loss_metric = tf.keras.metrics.Mean()
+            
+            val_trues = []
+            val_preds = []
+            for xb, yb, rb in val_dataset:
+                errs,pred_y = val_step(xb, yb, rb)
+                enp = errs.numpy()
+                val_errs.append(enp)
+                val_loss_metric.update_state(np.mean(np.square(enp)))
+
+                # 收集对数空间下的真实值和预测值，用于后续还原
+
+                val_trues.append(yb.numpy())
+                val_preds.append(pred_y.numpy())
+                
+                # 在对数空间下计算 Loss
+                val_loss_metric.update_state(np.mean(np.square(errs.numpy())))
+
+
+            # 计算验证指标
+            val_errs = np.concatenate([e.flatten() for e in val_errs])
+            val_rmse = np.sqrt(np.mean(np.square(val_errs)))
+            val_mae = np.mean(np.abs(val_errs))
+
+
+            
+            
+            logging.info(
+                f"Validation Results - RMSE: {val_rmse:.4f}, "
+                f"MAE: {val_mae:.4f}, MSE: {val_loss_metric.result().numpy():.4f}"
+            )
+
+             # 实际时间空间,计算验证指标
+            val_preds_log = np.concatenate([p.flatten() for p in val_preds])
+            val_trues_log = np.concatenate([t.flatten() for t in val_trues])
+             
+            val_preds_real = np.exp(val_preds_log)
+            val_trues_real = np.exp(val_trues_log)
+             # 在【实际时间空间】下计算物理指标
+            val_errs_real = val_preds_real - val_trues_real
+            val_mse = np.mean(np.square(val_errs_real))
+            val_rmse = np.sqrt(val_mse)
+            val_mae = np.mean(np.abs(val_errs_real))
+            
+            logging.info(
+                f"Validation Results (Real Time) - MSE: {val_mse:.4f}, "
+                f"RMSE: {val_rmse:.4f}, MAE: {val_mae:.4f}")
+
+    # 模型保存
+    make_dir_safe(DIR_TMP_MODEL)
+    timestamp = generate_timestamp()
+    save_path = f"{DIR_TMP_MODEL}/model0_{timestamp}_epoch_{epoch+1}.h5"
+    model.save(save_path)
+    logging.info(f"Model 0 saved to: {save_path}")
+
+    return model
 # ===================== 数据修补函数 =====================
 def fix_missing_data(df, fix_type):
     """
@@ -976,17 +1240,347 @@ def main(args):
             train_dataset, val_dataset, raw_cols,
             args, dt, raw_val=raw_val
         )
+    
+    if args.model == 2:
+    
+        # ===== 模型2：多头多任务 =====
+        y_reg = y
+        y_cf = y
+
+
+        X_train, X_val, y_reg_tr, y_reg_val, \
+        y_cf_tr, y_cf_val,raw_tr, raw_val = train_test_split(
+            X, y_reg, y_cf, raw_data_for_sim,
+            test_size=args.test_size, random_state=42
+        )
+
+        train_dataset = tf.data.Dataset.from_tensor_slices(
+            (X_train, y_reg_tr, y_cf_tr, raw_tr)
+        ).cache().batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+
+        val_dataset = tf.data.Dataset.from_tensor_slices(
+            (X_val, y_reg_val, y_cf_val, raw_val)
+        ).batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
+
+        train_model_multihead_cf_reg(
+            X_train, y_reg_tr, raw_tr,
+            train_dataset, val_dataset,
+            raw_cols, args, dt
+        )
 
     # 清理内存
     force_clean_all_memory()
     logger.info("训练流程完成")
 
+
+################################################################################################################
+################################################################################################################
+#mode 3
+def build_simple_resnet3(
+    input_dim,
+    num_types,
+    unit=128,
+    layNum=4,
+   dropout_rate=0.2
+):
+    """
+    多头多任务残差网络（共享骨干 + 4个任务头）
+
+    输出头:
+      head_vanish_reg  : 回归预测 vanishTime          → shape (batch, 1),       linear
+      head_cf_params   : W99跟车模型参数(sigmoid)      → shape (batch, (num_types+1)*10), sigmoid
+     
+    Parameters
+    ----------
+    input_dim           : int  输入特征维度
+    num_types           : int  车辆类别数（W99参数组数）
+    unit                : int  隐藏层宽度
+    layNum              : int  残差块数量
+    dropout_rate        : float Dropout率
+    """
+    output_dim_cf = (num_types + 1) * 10  # W99: 10个参数 × (num_types+1)组
+
+    # ---------- 预激活残差块 ----------
+    def preact_res_block(x, units, dr=0.2):
+        shortcut = x
+        y = BatchNormalization()(x)
+        y = ReLU()(y)
+        y = Dense(units, kernel_initializer='he_normal')(y)
+        y = Dropout(dr)(y)
+
+        y = BatchNormalization()(y)
+        y = ReLU()(y)
+        y = Dense(units, kernel_initializer='he_normal')(y)
+        y = Dropout(dr)(y)
+
+        if shortcut.shape[-1] != units:
+            shortcut = Dense(units, kernel_initializer='he_normal')(shortcut)
+
+        return Add()([shortcut, y])
+
+    # ---------- 共享骨干网络 ----------
+    inp = Input(shape=(input_dim,), name='multihead_input')
+
+    x = Dense(unit, kernel_initializer='he_normal')(inp)
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+
+    for _ in range(layNum):
+        x = preact_res_block(x, unit, dropout_rate)
+
+    # 骨干输出后再做一次 BN+ReLU 作为各头的公共特征
+    shared_feat = BatchNormalization()(x)
+    shared_feat = ReLU()(shared_feat)
+
+    # ==================== Head 1: vanishTime 回归 ====================
+    h1 = Dense(unit // 2, kernel_initializer='he_normal', name='h1_fc1')(shared_feat)
+    h1 = BatchNormalization()(h1)
+    h1 = ReLU()(h1)
+    h1 = Dropout(dropout_rate)(h1)
+    head_vanish_reg = Dense(1, activation='linear', name='head_vanish_reg')(h1)
+
+    # ==================== Head 2: CF 参数 (W99) ====================
+    h2 = Dense(unit, kernel_initializer='he_normal', name='h2_fc1')(shared_feat)
+    h2 = BatchNormalization()(h2)
+    h2 = ReLU()(h2)
+    h2 = Dropout(dropout_rate)(h2)
+    h2 = Dense(unit, kernel_initializer='he_normal', name='h2_fc2')(h2)
+    h2 = BatchNormalization()(h2)
+    h2 = ReLU()(h2)
+    head_cf_params = Dense(output_dim_cf, activation='sigmoid', name='head_cf_params')(h2)
+
+    
+    # ---------- 组装多输出模型 ----------
+    model = Model(
+        inputs=inp,
+        outputs=[head_vanish_reg, head_cf_params],
+        name='MultiHead_W99_ResNet'
+    )
+    return model
+
+
+def multihead_loss(y_true_reg, y_true_cf,pred_reg, pred_cf,raw_batch, param_bounds, num_types,
+                   tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
+                   dt, goffset,
+                   w_reg=1.0, w_cf=1.0):
+    """
+    多任务联合损失
+    """
+    # --- Loss 1: vanishTime 回归 (log空间 MSE) ---
+    loss_reg = tf.reduce_mean(tf.square(pred_reg - y_true_reg))
+
+    # --- Loss 2: CF仿真 → vanishTime (log空间 MSE) ---
+    pred_cf_clipped = tf.clip_by_value(pred_cf, 0.01, 0.99)
+    sim_times = tf_wiedemann99_simulation(
+        pred_cf_clipped, raw_batch, param_bounds, num_types,
+        tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
+        dt, goffset
+    )
+    sim_times_log = tf.math.log(tf.maximum(sim_times, 1e-7))
+    sim_times_log = tf.reshape(sim_times_log, tf.shape(y_true_cf))
+    # NaN/Inf 保护
+    sim_times_log = tf.where(tf.math.is_finite(sim_times_log),
+                             sim_times_log, tf.zeros_like(sim_times_log))
+    loss_cf = tf.reduce_mean(tf.square(sim_times_log - y_true_cf))
+
+   
+
+    total = w_reg * loss_reg + w_cf * loss_cf 
+    return total, loss_reg, loss_cf,pred_reg,sim_times_log
+
+
+def train_model_multihead_cf_reg(X_train, y_train, raw_train,
+                          train_dataset, val_dataset,
+                          raw_cols, args, dt):
+    """
+    多头多任务端到端训练
+    train_dataset 每个 batch 包含:
+      (x, y_reg, y_cf, y_miss, y_speed, raw)
+    """
+    num_types = args.num_types
+    model = build_simple_resnet3(
+        input_dim=X_train.shape[1],
+        num_types=num_types,
+        unit=args.unit,
+        layNum=args.layNum,
+        dropout_rate=0.2
+    )
+    model.summary(print_fn=logging.info)
+
+    param_bounds = get_param_bounds(num_types)
+
+    # 优化器
+    lr_schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
+        initial_learning_rate=args.lr * 10,
+        first_decay_steps=max(args.epochs // 4, 1),
+        t_mul=2.0, m_mul=0.5, alpha=1e-6
+    )
+    optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5, clipnorm=1.0)
+
+    # 索引常量
+    pos_idx_list = [i for i, c in enumerate(raw_cols) if c.startswith("car_position_")]
+    speed_idx_list = [i for i, c in enumerate(raw_cols) if c.startswith("car_speed_")]
+    tf_pos_idx = tf.constant(pos_idx_list, dtype=tf.int32)
+    tf_speed_idx = tf.constant(speed_idx_list, dtype=tf.int32)
+    tf_idx_main = tf.constant(raw_cols.index("main_car_position"), dtype=tf.int32)
+    tf_idx_inter = tf.constant(raw_cols.index("intersection_pos"), dtype=tf.int32)
+    tf_idx_red = tf.constant(raw_cols.index("redLightRemainingTime"), dtype=tf.int32)
+
+    # ---------- 训练步 ----------
+    @tf.function(reduce_retracing=True)
+    def train_step(x_b, y_reg_b, y_cf_b, raw_b):
+        with tf.GradientTape() as tape:
+            pred_reg, pred_cf = model(x_b, training=True)
+
+            total, l_reg, l_cf, pred_reg,sim_times_log = multihead_loss(
+                y_reg_b, y_cf_b, pred_reg, pred_cf, 
+                raw_b, param_bounds, num_types,
+                tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
+                dt, args.goffset
+            )
+
+        grads = tape.gradient(total, model.trainable_variables)
+        grads = [tf.where(tf.math.is_finite(g), g, tf.zeros_like(g)) for g in grads]
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
+        return total, l_reg, l_cf
+
+    # ---------- 验证步 ----------
+    @tf.function(reduce_retracing=True)
+    def val_step(x_b, y_reg_b, y_cf_b,raw_b):
+        pred_reg, pred_cf = model(x_b, training=False)
+        total, l_reg, l_cf,pred_reg,sim_times_log = multihead_loss(
+            y_reg_b, y_cf_b, 
+            pred_reg, pred_cf,
+            raw_b, param_bounds, num_types,
+            tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
+            dt, args.goffset
+        )
+        pred_cf = sim_times_log
+        return total, pred_reg, pred_cf,l_reg, l_cf
+
+    # ---------- 训练循环 ----------
+    total_batches = tf.data.experimental.cardinality(train_dataset).numpy()
+    best_val_loss = float('inf')
+
+    for epoch in range(args.epochs):
+        logging.info(f"===== [MultiHead] Epoch {epoch+1}/{args.epochs} =====")
+        epoch_loss = tf.keras.metrics.Mean()
+        batch_idx = 0
+
+        for (x_b, y_reg_b, y_cf_b,raw_b) in train_dataset:
+            batch_idx += 1
+            t0 = time.time()
+            total, l1, l2= train_step(x_b, y_reg_b, y_cf_b, raw_b)
+            dt_elapsed = time.time() - t0
+
+            epoch_loss.update_state(total)
+            logging.info(
+                f"  Batch {batch_idx}/{total_batches} | Total: {total.numpy():.4f} "
+                f"[Reg:{l1.numpy():.3f} CF:{l2.numpy():.3f} "
+                f"| {dt_elapsed:.2f}s"
+            )
+
+        logging.info(f"  Epoch {epoch+1} Avg Loss: {epoch_loss.result().numpy():.4f}")
+
+        # ---------- 验证 ----------
+        if epoch % 5 == 4 or epoch == args.epochs - 1:
+            logging.info("  [Validation]")
+            val_loss_avg = tf.keras.metrics.Mean()
+
+            val_reg_trues = []
+            val_cf_trues = []
+
+            val_reg_preds = []
+            val_cf_preds = []
+
+            for (x_b, y_reg_b, y_cf_b,raw_b) in val_dataset:
+                v_total, pred_y_reg, pred_y_cf,loss_reg,loss_cf= val_step(x_b, y_reg_b, y_cf_b, raw_b)
+                val_loss_avg.update_state(v_total)
+
+                val_reg_trues.append(y_reg_b.numpy())
+                val_cf_trues.append(y_cf_b.numpy())
+
+                val_reg_preds.append(pred_y_reg.numpy())
+                val_cf_preds.append(pred_y_cf.numpy())
+
+            val_loss = val_loss_avg.result().numpy()
+            logging.info(f"  Val Loss: {val_loss:.4f}")
+
+
+            # 回归部分 实际时间空间,计算验证指标
+            val_reg_preds_log = np.concatenate([p.flatten() for p in val_reg_preds])
+            val_reg_trues_log = np.concatenate([t.flatten() for t in val_reg_trues])
+             
+            val_reg_preds_real = np.exp(val_reg_preds_log)
+            val_reg_trues_real = np.exp(val_reg_trues_log)
+             # 在【实际时间空间】下计算物理指标
+            val_reg_errs_real = val_reg_preds_real - val_reg_trues_real
+            val_mse = np.mean(np.square(val_reg_errs_real))
+            val_rmse = np.sqrt(val_mse)
+            val_mae = np.mean(np.abs(val_reg_errs_real))
+            
+            logging.info(
+                f"Regress_Validation Results (Real Time) - MSE: {val_mse:.4f}, "
+                f"RMSE: {val_rmse:.4f}, MAE: {val_mae:.4f}")
+            
+
+            #cf 部分 实际时间空间,计算验证指标
+            val_cf_preds_log = np.concatenate([p.flatten() for p in val_cf_preds])
+            val_cf_trues_log = np.concatenate([t.flatten() for t in val_cf_trues])
+             
+            val_cf_preds_real = np.exp(val_cf_preds_log)
+            val_cf_trues_real = np.exp(val_cf_trues_log)
+             # 在【实际时间空间】下计算物理指标
+            val_cf_errs_real = val_cf_preds_real - val_cf_trues_real
+            val_mse = np.mean(np.square(val_cf_errs_real))
+            val_rmse = np.sqrt(val_mse)
+            val_mae = np.mean(np.abs(val_cf_errs_real))
+            
+            logging.info(
+                f"CFModel_Validation Results (Real Time) - MSE: {val_mse:.4f}, "
+                f"RMSE: {val_rmse:.4f}, MAE: {val_mae:.4f}")
+
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                make_dir_safe(DIR_TMP_MODEL)
+                ts = generate_timestamp()
+                path = f"{DIR_TMP_MODEL}/model_multihead_{ts}_ep{epoch+1}.h5"
+                model.save(path)
+                logging.info(f"  ★ Best model saved → {path}")
+
+    # 最终保存
+    make_dir_safe(DIR_TMP_MODEL)
+    ts = generate_timestamp()
+    final_path = f"{DIR_TMP_MODEL}/model_multihead_final_{ts}.h5"
+    model.save(final_path)
+    logging.info(f"MultiHead model saved → {final_path}")
+    return model
+
+def prepare_multihead_labels(df_fixed):
+    """
+    为多头模型准备 2 组标签:
+      y_reg   : log(time_to_vanish)            → (N, 1)
+      y_cf    : 同 y_reg（CF头仿真后与之比较）  → (N, 1)
+    """
+
+
+    # --- y_reg / y_cf ---
+    y_reg = np.log(df_fixed['time_to_vanish'].values / 30.0).astype(np.float32).reshape(-1, 1)
+    y_cf = y_reg.copy() 
+
+
+
+    return y_reg, y_cf
+
+
+################################################################################################################
+################################################################################################################
 # ===================== 入口执行 =====================
 if __name__ == "__main__":
     # 启动TF性能分析
-    log_dir = "./profiler_records"
-    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-    tf.profiler.experimental.server.start(6009)
+    #log_dir = "./profiler_records"
+    #os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+    #tf.profiler.experimental.server.start(6009)
     #tf.profiler.experimental.start(log_dir)
 
     # 命令行参数解析
@@ -1012,7 +1606,3 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     main(args)
-
-    # 停止性能分析
-    #tf.profiler.experimental.stop()
-    tf.profiler.experimental.server.stop()
