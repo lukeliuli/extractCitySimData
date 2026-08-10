@@ -1,1 +1,1 @@
-python modelsCollect9WIED99MultHead.py --batch_size 700 --test_size 0.85 --epochs 250 --lr 0.0002 --unit 256 --layNum 128 --dt 0.1 --nC 5000 --model 2 --fixdata 0 --trainvalmode 0 --goffset 1
+python modelsCollect9WIED99MultHead.py --batch_size 1000 --test_size 0.85 --epochs 250 --lr 0.0002 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 1 --fixdata 0 --trainvalmode 0 --goffset 1

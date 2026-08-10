@@ -1095,27 +1095,29 @@ def main(args):
         'car_speed': 'main_car_speed'
     }, inplace=True)
 
-
-
-    # ===================== 2. 生成缺失数据样本 =====================
-    logger.info("生成缺失车辆样本...")
-    # 生成不同数量丢失车辆的样本
-    df_missveh_rn1, _, df_missveh2_rn1 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=1)
-    df_missveh_rn2, _, df_missveh2_rn2 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=2)
-    df_missveh_rn3, _, df_missveh2_rn3 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=3)
-    df_missveh_rn4, _, df_missveh2_rn4 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=4)
+    print(f"数据加载完成，df1 样本数: {len(df1)},注意每个样本已经按照位置进行了排序。也就是car_position_0是最前方的车，car_position_1是第二辆车，依次类推。")
+    print(f"数据预览:\n{df1.head(2)}")
     
-    # 合并缺失样本
-    df_step2_missveh2 = pd.concat([
-        df_missveh2_rn1, df_missveh2_rn2, 
-        df_missveh2_rn3, df_missveh2_rn4
-    ], ignore_index=True)
 
+ 
+    # ===================== 2. 生成缺失数据样本 =====================
     # ===================== 3. 样本合并与过滤 =====================
     # 选择训练验证模式
     if args.trainvalmode == 0:
         df_all = df1
     else:
+        logger.info("生成缺失车辆样本...")
+        # 生成不同数量丢失车辆的样本
+        df_missveh_rn1, _, df_missveh2_rn1 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=1)
+        df_missveh_rn2, _, df_missveh2_rn2 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=2)
+        df_missveh_rn3, _, df_missveh2_rn3 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=3)
+        df_missveh_rn4, _, df_missveh2_rn4 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=4)
+        
+        # 合并缺失样本
+        df_step2_missveh2 = pd.concat([
+            df_missveh2_rn1, df_missveh2_rn2, 
+            df_missveh2_rn3, df_missveh2_rn4
+        ], ignore_index=True)
         df_all = pd.concat([df1, df_step2_missveh2], ignore_index=True)
     
     # 添加路口位置列
@@ -1153,38 +1155,51 @@ def main(args):
     )
 
     # ===================== 4. 样本抽样 =====================
-    logger.info(f"开始样本抽样，目标数量: {args.nC}")
-    sampled_indices = get_sample_indices(df_all, args.nC)
-    df_sampled = df_all.iloc[sampled_indices].reset_index(drop=True)
-    logger.info(
-        f"抽样完成 - 最终样本数: {len(df_sampled)}, "
-        f"聚类抽样数: {min(len(sampled_indices)//2, args.nC//2)}, "
-        f"加权补充数: {max(0, len(sampled_indices) - args.nC//2)}"
-    )
+    if args.nC > len(df_all) or args.nC <= 0:
+        logger.warning(
+            f"目标样本数 {args.nC} 超过可用样本数 {len(df_all)} 或不合法，"
+            f"将使用全部样本进行训练"
+        )
+        args.nC = len(df_all)
+        df_sampled = df_all.copy()
+    else:
+        logger.info(f"开始样本抽样，目标数量: {args.nC}")
+        sampled_indices = get_sample_indices(df_all, args.nC)
+        df_sampled = df_all.iloc[sampled_indices].reset_index(drop=True)
+        logger.info(
+            f"抽样完成 - 最终样本数: {len(df_sampled)}, "
+            f"聚类抽样数: {min(len(sampled_indices)//2, args.nC//2)}, "
+            f"加权补充数: {max(0, len(sampled_indices) - args.nC//2)}"
+        )
 
     # ===================== 5. 数据修补 =====================
-    df_fixed = fix_missing_data(df_sampled, args.fixdata)
+    if args.fixdata > 0:
+        df_fixed = fix_missing_data(df_sampled, args.fixdata)
+    else:
+        df_fixed = df_sampled.copy()
+        logger.info("数据修补已禁用，直接使用抽样数据")
 
     # ===================== 6. 数据集构建 =====================
     # 特征列和原始数据列
-    feature_cols = [
-        c for c in df_fixed.columns 
-        if ('car_position_' in c or 'car_speed_' in c or 'redLight' in c)
-    ]
-    raw_cols_set = set(feature_cols)
-    raw_cols_set.update([
-        'lane', 'intersection_pos', 'main_car_position',
-        'main_car_speed', 'lost'
-    ])
-    raw_cols = sorted(list(raw_cols_set))
+    feature_cols = [f"car_position_{i}" for i in range(20)] + [f"car_speed_{i}" for i in range(20)]
+    feature_cols.append('intersection_pos')
+    feature_cols.append('lane')
+    feature_cols.append('main_car_position')
+    feature_cols.append('main_car_speed')
+    feature_cols.append('queued_vehicles')
+    feature_cols.append('redLightRemainingTime')
+    raw_cols = feature_cols
 
+
+    print(f"原始数据列: {raw_cols}")
     # 数据转换
     X = df_fixed[feature_cols].values.astype(np.float32)
-    y = (df_fixed['time_to_vanish'].values / 30.0).astype(np.float32)
+    y = (df_fixed['time_to_vanish'].values / 30.0).astype(np.float32) #注意这里训练样本的y/30,以秒为单位，后面还有log化
     raw_data_for_sim = df_fixed[raw_cols].values.astype(np.float32)
 
     y = np.log(y) #注意y对数化了---------------------------------------------------------------------这里y对数化了
-
+    print(f"这里完成训练数据集构建，注意这里样本的y/30,以秒为单位，以及log化")
+    
     
     # 1. 生成掩码：X 的所有特征有限 且 y 有限
     mask = np.isfinite(X).all(axis=1) & np.isfinite(y)
@@ -1206,7 +1221,10 @@ def main(args):
         f"数据集构建完成 - 训练集: {len(X_train)} 样本, "
         f"验证集: {len(X_val)} 样本"
     )
-
+    print(f"原始数据列: {raw_cols}")
+    print(f"训练集样本预览:\n,x_train[0:2]:\n{np.round(X_train[0:1], 1)}\n,y_train[0:2]:\n{np.round(y_train[0:1], 1)}\n)")
+    
+    
     # ===================== 7. 模型训练 =====================
     dt = args.dt or DEFAULT_DT
     logger.info(f"开始模型训练，仿真时间步长: {dt}")
@@ -1556,30 +1574,11 @@ def train_model_multihead_cf_reg(X_train, y_train, raw_train,
     logging.info(f"MultiHead model saved → {final_path}")
     return model
 
-def prepare_multihead_labels(df_fixed):
-    """
-    为多头模型准备 2 组标签:
-      y_reg   : log(time_to_vanish)            → (N, 1)
-      y_cf    : 同 y_reg（CF头仿真后与之比较）  → (N, 1)
-    """
-
-
-    # --- y_reg / y_cf ---
-    y_reg = np.log(df_fixed['time_to_vanish'].values / 30.0).astype(np.float32).reshape(-1, 1)
-    y_cf = y_reg.copy() 
-
-
-
-    return y_reg, y_cf
-
-
-################################################################################################################
-################################################################################################################
 # ===================== 入口执行 =====================
 if __name__ == "__main__":
     # 启动TF性能分析
-    #log_dir = "./profiler_records"
-    #os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+    log_dir = "./profiler_records"
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
     #tf.profiler.experimental.server.start(6009)
     #tf.profiler.experimental.start(log_dir)
 
@@ -1606,3 +1605,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     main(args)
+
+    # 停止性能分析
+    #tf.profiler.experimental.stop()
+    #tf.profiler.experimental.server.stop()
