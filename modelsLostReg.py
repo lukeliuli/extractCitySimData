@@ -377,7 +377,107 @@ def genSamplesRemovingVehicleWithNum(df, num_to_remove = 1):
     #print(removed_rows1[0])#调试用
     return df_missveh,rowSamplesInfo,df_missveh2
 
+def get_car_pos_speed_cols(col_list):
+    """统一提取car_position_、car_speed_开头列，多处复用"""
+    pos_cols = [c for c in col_list if c.startswith('car_position_')]
+    speed_cols = [c for c in col_list if c.startswith('car_speed_')]
+    return pos_cols, speed_cols
 
+def count_queued_vehicles(row):
+            """统计主车前方排队车辆数"""
+            pos_cols, _ = get_car_pos_speed_cols(row.index)
+            main_pos = row['main_car_position']
+            queued_count = 0
+            for col in pos_cols:
+                pos = row[col]
+                if pos != -1 and not pd.isna(pos) and pos > main_pos:
+                    queued_count += 1
+            return queued_count
+
+def remove_onevehicle_slot(row, removeVehIndex):
+    queued_Vehicles = row['queued_vehicles']
+    if removeVehIndex >= queued_Vehicles or queued_Vehicles == 0 :
+        logging.info("slot >= queued_Vehicles: cannot remove")
+        return row, None
+
+    main_pos = row['main_car_position']
+    removeVehCol = None
+    queued_index = -1  # 移到循环外
+
+    for i in range(20):
+        pos_col = f"car_position_{i}"
+        speed_col = f"car_speed_{i}"
+        pos = row[pos_col]
+
+        if pos != -1 and pos > main_pos:
+            queued_index += 1
+            if removeVehIndex == queued_index:
+                row[pos_col] = -1
+                row[speed_col] = -1
+                removeVehCol = pos_col
+                row['lost'] = 1
+
+            elif removeVehIndex < queued_index:
+                if i > 0:
+                    prev_pos_col = f"car_position_{i-1}"
+                    prev_speed_col = f"car_speed_{i-1}"
+                    row[prev_pos_col] = row[pos_col]
+                    row[prev_speed_col] = row[speed_col]  # 修正速度赋值
+                    row[pos_col] = -1
+                    row[speed_col] = -1
+
+    row['removed_vehicles'] = removeVehCol
+    # 可选：更新 queued_vehicles
+
+    return row, removeVehCol
+
+
+        
+        
+            
+            
+
+def genSamplesRemovingVehicleWithOneSlot(df):
+    """
+    根据上下文，读入csv文件，获得当前样本的下主车前，排队车辆有那些以及相应的位置和序号。
+    随机删除一些车辆，并进行重新按位置排序，记录删除的车辆是在那些车辆中间，具体为slot，那辆车前面。
+    
+    """
+    df1 = df.copy()
+
+    df1['lost'] = 0
+    df1['removed_vehicles'] = None
+    df1.rename(columns={
+        'car_position': 'main_car_position',
+        'car_speed': 'main_car_speed'
+    }, inplace=True)
+
+
+
+    n_samples = len(df1)
+      
+    
+ 
+    # 计算排队车辆数
+    df1['queued_vehicles'] = df1.apply(count_queued_vehicles, axis=1)
+    
+    #注意假定，车辆已经按照位置从小到大排列,car_position_0 为位置最小
+    for i in range(n_samples):
+        row = df1.iloc[i]
+        n_queued = row['queued_vehicles']
+        
+        if n_queued <= 0:
+            continue
+        removeVehIndex = np.random.randint(0, n_queued)
+        row1,colName = remove_onevehicle_slot(row,removeVehIndex)
+        df1.iloc[i] = row1    
+        #print(df1.iloc[i])
+
+        
+    df1['queued_vehicles']  = df1.apply(count_queued_vehicles, axis=1)
+    #print(removed_rows[0])#调试用
+    #print(removed_rows1[0])#调试用
+    return df1
 
 
 #--------------------------------------------------------------------------------------------------------

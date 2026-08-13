@@ -22,10 +22,13 @@ from sklearn.cluster import KMeans
 # ===================== 本地模块导入 =====================
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from tf_wiedemann99_simulation import tf_wiedemann99_simulation
+
+pd.options.mode.chained_assignment = None
 from modelsLostReg import (
     genDatasetLost,
     genSamplesByRandomRemovingVehicle,
-    genSamplesRemovingVehicleWithNum
+    genSamplesRemovingVehicleWithNum,
+     genSamplesRemovingVehicleWithOneSlot
 )
 
 # ===================== 全局常量定义（统一修改入口） =====================
@@ -612,7 +615,6 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
 
                 val_trues.append(yb.numpy())
                 val_preds.append(pred_y.numpy())
-
                 
                 # 在对数空间下计算 Loss
                 val_loss_metric.update_state(np.mean(np.square(errs.numpy())))
@@ -657,48 +659,45 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     return model
 
 # ===================== 模型1训练：直接回归预测消失时间 =====================
+# ===================== 模型1训练：直接回归预测消失时间 =====================
 from tensorflow.keras.callbacks import LambdaCallback
 def make_inverse_log_mse_callback(model, val_dataset, log_offset=1e-8):
     history = []
 
     def on_epoch_end(epoch, logs=None):
-        y_true_all, y_pred_all = [], []
+
+        if epoch%20 != 1:
+            return 
+
+        val_trues = []
+        val_preds = []
         for X_batch, y_batch in val_dataset:
             pred = model(X_batch, training=False)  
-            y_true_all.append(y_batch.numpy())
-            y_pred_all.append(pred.numpy())
+            val_trues.append(y_batch.numpy())
+            val_preds.append(pred.numpy())
 
-        y_true = np.concatenate(y_true_all, axis=0).flatten()
-        y_pred = np.concatenate(y_pred_all, axis=0).flatten()
 
-        y_true_inv = np.exp(y_true) - log_offset
-        y_pred_inv = np.exp(y_pred) - log_offset
+        val_preds_log = np.concatenate([p.flatten() for p in val_preds])
+        val_trues_log = np.concatenate([t.flatten() for t in val_trues]) 
+        val_preds_log = np.clip(val_preds_log,-5,5)
+        val_trues_log = np.clip(val_trues_log,-5,5)
 
-        inv_mse = float(np.mean((y_true_inv - y_pred_inv) ** 2))
-        inv_mae = float(np.mean(np.abs(y_true_inv - y_pred_inv)))
-        history.append(inv_mae)
+        val_preds_real = np.exp(val_preds_log)
+        val_trues_real = np.exp(val_trues_log)
 
-        if not np.isfinite(inv_mse):
-            inv_mse = float('inf')
-        if not np.isfinite(inv_mae):
-            inv_mae = float('inf')
+        val_errs_real = val_preds_real - val_trues_real
+        val_mae_real = np.mean(np.abs(val_errs_real))
+        
+        
 
-        if logs is not None:
-            logs['val_inverse_log_inv_mae'] = inv_mae
-
-        logging.info(f"Epoch {epoch+1} | val_inverse_log_mae: {inv_mae:.4f}")
-        print(f"[InverseLogCB] Epoch {epoch+1} | inv_MAE: {inv_mae:.4f} | inv_MSE: {inv_mse:.4f}", flush=True)
-
+        history.append(val_mae_real )
+        logging.info(f"\n $$ val_mae_real: { val_mae_real:.4f}")
+        logging.info(f"\n $$ val_mae_real: { val_mae_real:.4f}")
+        logging.info(f"\n $$ val_mae_real: { val_mae_real:.4f}")
     cb = LambdaCallback(on_epoch_end=on_epoch_end)
     cb.inverse_log_mse_history = history
     return cb
-def expmae2(y_true, y_pred):
-        log_offset=1e-8, clip_val=20.0
-        y_true_c = tf.clip_by_value(y_true, -clip_val, clip_val)
-        y_pred_c = tf.clip_by_value(y_pred, -clip_val, clip_val)
-        y_true_inv = tf.exp(y_true_c) - log_offset
-        y_pred_inv = tf.exp(y_pred_c) - log_offset
-        return tf.reduce_mean(tf.abs(y_true_inv - y_pred_inv))
+
 def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt, raw_val=None):
     """
     MLP直接回归预测消失时间
@@ -731,7 +730,7 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
     model_vanish_reg.compile(
         optimizer=optimizer,
         loss='mse',
-        metrics=['mae', expmae2]
+        metrics=['mae', rmse]
     )
 
     # 早停策略
@@ -741,7 +740,7 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
         restore_best_weights=True, 
         verbose=1
     )
-    inverse_log_cb = make_inverse_log_mse_callback(model=model_vanish_reg,val_dataset=val_dataset,log_offset=1e-8)
+    inv_callback = make_inverse_log_mse_callback(model_vanish_reg, val_dataset)
 
     # 模型训练
     model_vanish_reg.fit(
@@ -749,19 +748,19 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
         validation_data=val_dataset,
         epochs=args.epochs,
         verbose=1,
-        callbacks=[inverse_log_cb],
+        callbacks=[inv_callback],
         shuffle=True
     )
 
     # 评估指标
-    train_loss, train_mae, train_expmae = model_vanish_reg.evaluate(train_dataset, verbose=0)
-    val_loss, val_mae, val_expmae = model_vanish_reg.evaluate(val_dataset, verbose=0)
+    train_loss, train_mae, train_rmse = model_vanish_reg.evaluate(train_dataset, verbose=0)
+    val_loss, val_mae, val_rmse = model_vanish_reg.evaluate(val_dataset, verbose=0)
     
     logging.info(
-        f"Training Set - MAE: {train_mae:.4f}, MSE: {train_loss:.4f}, expmae: {train_expmae:.4f}"
+        f"Training Set - MAE: {train_mae:.4f}, MSE: {train_loss:.4f}, RMSE: {train_rmse:.4f}"
     )
     logging.info(
-        f"Validation Set - MAE: {val_mae:.4f}, MSE: {val_loss:.4f}, expmae: {val_expmae:.4f}"
+        f"Validation Set - MAE: {val_mae:.4f}, MSE: {val_loss:.4f}, RMSE: {val_rmse:.4f}"
     )
 
     # 模型保存
@@ -886,17 +885,15 @@ def main(args):
     else:
         logger.info("生成缺失车辆样本...")
         # 生成不同数量丢失车辆的样本
-        df_missveh_rn1, _, df_missveh2_rn1 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=1)
-        df_missveh_rn2, _, df_missveh2_rn2 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=2)
-        df_missveh_rn3, _, df_missveh2_rn3 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=3)
-        df_missveh_rn4, _, df_missveh2_rn4 = genSamplesRemovingVehicleWithNum(df1, num_to_remove=4)
+        df_missveh1 =  genSamplesRemovingVehicleWithOneSlot(df1)
+     
         
         # 合并缺失样本
-        df_step2_missveh2 = pd.concat([
-            df_missveh2_rn1, df_missveh2_rn2, 
-            df_missveh2_rn3, df_missveh2_rn4
-        ], ignore_index=True)
-        df_all = pd.concat([df1, df_step2_missveh2], ignore_index=True)
+        #df_step2_missveh2 = pd.concat([
+        #    df_missveh2_rn1, df_missveh2_rn2, 
+        #    df_missveh2_rn3, df_missveh2_rn4
+        #], ignore_index=True)
+        df_all = pd.concat([df1, df_missveh1], ignore_index=True)
     
     
     # 添加路口位置列
@@ -911,7 +908,7 @@ def main(args):
         queued_count = 0
         for col in pos_cols:
             pos = row[col]
-            if pos != -1 and not pd.isna(pos) and pos < main_pos:
+            if pos != -1 and not pd.isna(pos) and pos > main_pos:
                 queued_count += 1
         return queued_count
 
@@ -919,14 +916,13 @@ def main(args):
     df_all['queued_vehicles'] = df_all.apply(count_queued_vehicles, axis=1)
     
     # 过滤条件
-    cond_queued = (df_all['queued_vehicles'] > 3) | (df_all['queued_vehicles'] < 1)
+    cond_queued = (df_all['queued_vehicles'] > 4) | (df_all['queued_vehicles'] < 1)
     cond_lost = df_all['lost'] >= 3
     cond_vanish = df_all['time_to_vanish'] > 35 * 30  # 还原原始时间
     cond_redTime = df_all['time_to_vanish'] < df_all['redLightRemainingTime']
-    
     # 执行过滤
     before_count = len(df_all)
-    df_all = df_all[~(cond_queued | cond_lost |cond_redTime | cond_vanish)].reset_index(drop=True)
+    df_all = df_all[~(cond_queued | cond_lost | cond_vanish | cond_redTime)].reset_index(drop=True)
     after_count = len(df_all)
     logger.info(
         f"样本过滤完成 - 过滤前: {before_count} 个, "
