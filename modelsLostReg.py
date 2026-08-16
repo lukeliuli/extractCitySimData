@@ -394,15 +394,17 @@ def count_queued_vehicles(row):
                     queued_count += 1
             return queued_count
 
-def remove_onevehicle_slot(row, removeVehIndex):
+def remove_onevehicle_slot(row, removeQueueVehIndex):
+    outputDim = 5 #数据集中实际上最多只有6辆车排队，移除车辆只能是car_position_1~5
     queued_Vehicles = row['queued_vehicles']
-    if removeVehIndex >= queued_Vehicles or queued_Vehicles == 0 :
+    if removeQueueVehIndex >= queued_Vehicles or queued_Vehicles == 0 :
         logging.info("slot >= queued_Vehicles: cannot remove")
         return row, None
 
     main_pos = row['main_car_position']
     removeVehCol = None
     queued_index = -1  # 移到循环外
+   
 
     for i in range(20):
         pos_col = f"car_position_{i}"
@@ -411,13 +413,14 @@ def remove_onevehicle_slot(row, removeVehIndex):
 
         if pos != -1 and pos > main_pos:
             queued_index += 1
-            if removeVehIndex == queued_index:
+            if removeQueueVehIndex == queued_index:
                 row[pos_col] = -1
                 row[speed_col] = -1
                 removeVehCol = pos_col
                 row['lost'] = 1
+                
 
-            elif removeVehIndex < queued_index:
+            elif removeQueueVehIndex < queued_index:
                 if i > 0:
                     prev_pos_col = f"car_position_{i-1}"
                     prev_speed_col = f"car_speed_{i-1}"
@@ -427,15 +430,59 @@ def remove_onevehicle_slot(row, removeVehIndex):
                     row[speed_col] = -1
 
     row['removed_vehicles'] = removeVehCol
+    row['removed_vehicles_intidx'] = int(removeVehCol.split('_')[-1])
+    removed_idx = int(removeVehCol.split('_')[-1])
+    row['removed_vehicles_multlabel'] = [0] * outputDim
+    row['removed_vehicles_multlabel'][removed_idx-1] = 1#数据集中实际上最多只有6辆车排队，移除车辆只能是car_position_1~5，对应位置0~4
+
+    #数据中，已经假定car_position_0,位置最小，car_position_19位置最大。随着index增大，位置增大。最大只有20辆车，car_position_19假定最接近该车道消失线
+    for i in range(19):
+        pos_col = f"car_position_{i}"
+        speed_col = f"car_speed_{i}"
+        front_pos_col = f"car_position_{i+1}"
+        front_speed_col = f"car_speed_{i+1}"
+        
+        pos = row[pos_col]
+        front_pos = row[front_pos_col]
+        if pos == -1:
+            gap_col = f"car_gap_{i}"
+            dv_col = f"car_dv_{i}"
+            row[gap_col] = -1
+            row[dv_col] = -1
+
+        elif front_pos == -1:
+            gap_col = f"car_gap_{i}"
+            dv_col = f"car_dv_{i}"
+            row[gap_col] = row['intersection_pos'] - pos
+            row[dv_col] = row[speed_col]
+
+        else:
+           gap_col = f"car_gap_{i}"
+           dv_col = f"car_dv_{i}"
+           row[gap_col] = front_pos - pos
+           row[dv_col] =  row[front_speed_col] - row[speed_col]
+
+    row["car_gap_19"]   = row['intersection_pos'] - row["car_position_19"]
+    row["car_dv_19"]   =  row["car_speed_19"]
+    
     # 可选：更新 queued_vehicles
-
-    return row, removeVehCol
+    
+    return row, removeVehCol,removed_idx
 
 
         
         
             
             
+def process_row(row):
+    """处理单行数据，计算排队车辆数"""
+    n_queued = row['queued_vehicles']
+        
+    if n_queued <= 0:
+        return row
+    removeVehIndex = np.random.randint(0, n_queued)
+    row1,colName,removed_idx = remove_onevehicle_slot(row,removeVehIndex)
+    return row1
 
 def genSamplesRemovingVehicleWithOneSlot(df):
     """
@@ -445,38 +492,35 @@ def genSamplesRemovingVehicleWithOneSlot(df):
     """
     df1 = df.copy()
 
-    df1['lost'] = 0
-    df1['removed_vehicles'] = None
-    df1.rename(columns={
-        'car_position': 'main_car_position',
-        'car_speed': 'main_car_speed'
-    }, inplace=True)
 
 
-
-    n_samples = len(df1)
+    
       
+    df1['queued_vehicles']  = df1.apply(count_queued_vehicles, axis=1)
+    df1 = df1.apply(process_row, axis=1)
     
  
-    # 计算排队车辆数
-    df1['queued_vehicles'] = df1.apply(count_queued_vehicles, axis=1)
-    
+    #n_samples = len(df1)
     #注意假定，车辆已经按照位置从小到大排列,car_position_0 为位置最小
-    for i in range(n_samples):
-        row = df1.iloc[i]
-        n_queued = row['queued_vehicles']
+    #for i in range(n_samples):
+    #    row = df1.iloc[i]
+    #    n_queued = row['queued_vehicles']
         
-        if n_queued <= 0:
-            continue
-        removeVehIndex = np.random.randint(0, n_queued)
-        row1,colName = remove_onevehicle_slot(row,removeVehIndex)
-        df1.iloc[i] = row1    
+    #    if n_queued <= 0:
+    #        continue
+    #    removeVehIndex = np.random.randint(0, n_queued)
+    #    row1,colName,removed_idx = remove_onevehicle_slot(row,removeVehIndex)
+    #    #print(row1.index.tolist())
+        
+    #    df1.iloc[i] = row1    
         #print(df1.iloc[i])
-
+    
         
     df1['queued_vehicles']  = df1.apply(count_queued_vehicles, axis=1)
     #print(removed_rows[0])#调试用
     #print(removed_rows1[0])#调试用
+    
+    print(df1[['removed_vehicles_intidx','removed_vehicles_multlabel','removed_vehicles']].head(10))
     return df1
 
 

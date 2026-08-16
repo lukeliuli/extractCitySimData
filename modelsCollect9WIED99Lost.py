@@ -28,7 +28,7 @@ from modelsLostReg import (
     genDatasetLost,
     genSamplesByRandomRemovingVehicle,
     genSamplesRemovingVehicleWithNum,
-     genSamplesRemovingVehicleWithOneSlot
+    genSamplesRemovingVehicleWithOneSlot
 )
 
 # ===================== 全局常量定义（统一修改入口） =====================
@@ -389,6 +389,38 @@ def build_simple_resnet_regress2(input_dim, output_dim, unit=128, layNum=4):
         x = resnet_block(x, unit, dropout_rate=0.2)
 
     out = Dense(1, activation='linear', name='vanish_time')(x)
+    model = Model(inputs=inp, outputs=out)
+    return model
+
+def build_simple_resnet_regress3(input_dim, output_dim, unit=128, layNum=4):
+    """轻量化带Dropout回归网络，直接丢失车辆的slot_multlabel预测"""
+    def resnet_block(x, units, dropout_rate=0.2):
+        shortcut = x
+        y = BatchNormalization()(x)
+        y = ReLU()(y)
+        y = Dense(units, kernel_initializer='he_normal')(y)
+        y = Dropout(dropout_rate)(y)
+
+        y = BatchNormalization()(y)
+        y = ReLU()(y)
+        y = Dense(units, kernel_initializer='he_normal')(y)
+        y = Dropout(dropout_rate)(y)
+
+        if shortcut.shape[-1] != units:
+            shortcut = Dense(units)(shortcut)
+
+        y = Add()([shortcut, y])
+        return y
+
+    inp = Input(shape=(input_dim,))
+    x = Dense(unit, kernel_initializer='he_normal')(inp)
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+
+    for _ in range(layNum):
+        x = resnet_block(x, unit, dropout_rate=0.2)
+
+    out = Dense(output_dim, activation='sigmoid',name='missvehicles_slot_multlabel')(x)
     model = Model(inputs=inp, outputs=out)
     return model
 
@@ -772,6 +804,124 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
 
     return model_vanish_reg
 
+def make_missvehmultlabel_callback(model, val_dataset):
+   
+    def on_epoch_end(epoch, logs=None):
+
+        if epoch%20 != 1:
+            return 
+        logging.info(f"\n Epoch {epoch+1} - 预测丢失车辆slot_multlabel验证指标计算中...")
+      
+    cb = LambdaCallback(on_epoch_end=on_epoch_end)
+    
+    return cb
+
+from sklearn.metrics import multilabel_confusion_matrix, classification_report
+def train_model_mlp_missonly(X_train, y_miss_train, raw_train, train_dataset, val_dataset, 
+                             raw_cols, args, dt, raw_val=None):
+
+    logging.info("启动MLP多标签分类模型训练（预测5个slot中哪些有丢失）") #数据集中移除车辆只能是car_position_1到5，对应位置0到4
+    print("正样本总数:\n", np.sum(y_miss_train))
+    print("每个类别的正样本数:\n", np.sum(y_miss_train, axis=0))
+    print("每个类别正样本比例:\n", np.round(np.mean(y_miss_train, axis=0), 2))
+    
+    output_dim = y_miss_train.shape[1]  # 5个slot的多标签输出
+
+    # 1. 构建模型（确保输出层 activation='sigmoid'）
+    model = build_simple_resnet_regress3(
+        X_train.shape[1], output_dim, args.unit, args.layNum)
+
+
+    # 2. 优化器
+    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        args.lr, decay_steps=100, decay_rate=0.99, staircase=True
+    )
+    optimizer = tf.keras.optimizers.Adam(learning_rate=args.lr)
+
+    # 3. 编译（使用精简且适合多标签的指标）
+    model.compile(
+        optimizer=optimizer,
+        loss='binary_crossentropy',
+        metrics=[
+            'binary_accuracy',
+            tf.keras.metrics.AUC(multi_label=True, name='auc_per_class'),
+            tf.keras.metrics.Precision(name='precision'),
+            tf.keras.metrics.Recall(name='recall')
+        ]
+    )
+
+    # 4. 回调（假设 make_missvehmultlabel_callback 内部已适配）
+    callback = make_missvehmultlabel_callback(model, val_dataset)
+
+    # 5. 训练
+    model.fit(
+        train_dataset,
+        validation_data=val_dataset,
+        epochs=args.epochs,
+        verbose=1,
+        callbacks=[callback],
+        shuffle=True
+    )
+
+    # 训练集评估
+    train_loss, train_bin_acc, train_auc_per_class, train_precision, train_recall = model.evaluate(train_dataset, verbose=0)
+    val_loss, val_bin_acc, val_auc_per_class, val_precision, val_recall = model.evaluate(val_dataset, verbose=0)
+
+
+
+
+    # 计算 F1
+    train_f1 = 2 * (train_precision * train_recall) / (train_precision + train_recall + 1e-7)
+    val_f1 = 2 * (val_precision * val_recall) / (val_precision + val_recall + 1e-7)
+
+    logging.info(
+        f"Training   - Loss: {train_loss:.4f}, BinAcc: {train_bin_acc:.4f}, "
+        f"Precision: {train_precision:.4f}, Recall: {train_recall:.4f}, F1: {train_f1:.4f}"
+    )
+    logging.info(
+        f"Validation - Loss: {val_loss:.4f}, BinAcc: {val_bin_acc:.4f}, "
+        f"Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, F1: {val_f1:.4f}"
+    )
+
+
+  
+
+    
+
+
+    # 获取验证集的预测概率和标签
+    y_true_val = []
+    y_pred_prob_val = []
+    for xb, yb in val_dataset:
+        y_true_val.append(yb.numpy())
+        y_pred_prob_val.append(model.predict_on_batch(xb))
+
+    y_true_val = np.concatenate(y_true_val, axis=0)      # shape: (n_samples, 5)
+    y_pred_prob_val = np.concatenate(y_pred_prob_val, axis=0)
+
+    # 将概率转换为 0/1 预测（阈值 0.5）
+    y_pred_val = (y_pred_prob_val >= 0.5).astype(int)
+
+    # 计算每个类别的混淆矩阵
+    mcm = multilabel_confusion_matrix(y_true_val, y_pred_val)  # shape (20, 2, 2)
+
+    # 打印每个类别的混淆矩阵
+    for i in range(5):
+        tn, fp, fn, tp = mcm[i].ravel()
+        print(f"Class {i:2d} | TP: {tp:4d}  FP: {fp:4d}  FN: {fn:4d}  TN: {tn:4d}")
+
+    print("概率值 (前3样本, 前5类):\n", np.round(y_pred_prob_val[:10,], 2))
+    print("二值预测 (前3样本, 前5类):\n", y_pred_val[:10,])
+    print("真实标签 (前3样本, 前5类):\n", y_true_val[:10, ])
+
+    # 7. 保存模型
+    make_dir_safe(DIR_TMP_MODEL)
+    timestamp = generate_timestamp()
+    model_path = f"{DIR_TMP_MODEL}/model_missvehmultlabel_{timestamp}.h5"
+    model.save(model_path)
+    logging.info(f"多标签模型已保存至: {model_path}")
+
+    return model
 # ===================== 数据修补函数 =====================
 def fix_missing_data(df, fix_type):
     """
@@ -858,7 +1008,49 @@ def fix_missing_data(df, fix_type):
     logging.info(f"数据修补完成，共处理 {len(lost_indices)} 个缺失样本")
     return df
 
+def count_queued_vehicles(row):
+            """统计主车前方排队车辆数"""
+            pos_cols, _ = get_car_pos_speed_cols(row.index)
+            main_pos = row['main_car_position']
+            queued_count = 0
+            for col in pos_cols:
+                pos = row[col]
+                if pos != -1 and not pd.isna(pos) and pos > main_pos:
+                    queued_count += 1
+            return queued_count
+def compute_gap_and_dv(row):
+    #数据中，已经假定car_position_0,位置最小，car_position_19位置最大。随着index增大，位置增大。最大只有20辆车，car_position_19假定最接近该车道消失线
+    for i in range(19):
+        pos_col = f"car_position_{i}"
+        speed_col = f"car_speed_{i}"
+        front_pos_col = f"car_position_{i+1}"
+        front_speed_col = f"car_speed_{i+1}"
+        
+        pos = row[pos_col]
+        front_pos = row[front_pos_col]
+        if pos == -1:
+            gap_col = f"car_gap_{i}"
+            dv_col = f"car_dv_{i}"
+            row[gap_col] = -1
+            row[dv_col] = -1
+
+        elif front_pos == -1:
+            gap_col = f"car_gap_{i}"
+            dv_col = f"car_dv_{i}"
+            row[gap_col] = row['intersection_pos'] - pos
+            row[dv_col] = row[speed_col]
+
+        else:
+           gap_col = f"car_gap_{i}"
+           dv_col = f"car_dv_{i}"
+           row[gap_col] = front_pos - pos
+           row[dv_col] =  row[front_speed_col] - row[speed_col]
+
+    row["car_gap_19"]   = row['intersection_pos'] - row["car_position_19"]
+    row["car_dv_19"]   =  row["car_speed_19"]
+    return row
 # ===================== 主函数 =====================
+#import swifter
 def main(args):
     """主训练流程"""
     # 初始化日志
@@ -876,7 +1068,24 @@ def main(args):
     }, inplace=True)
 
 
+    # 添加路口位置列,以及其他列
+    miss_outdim =5 #根据数据集，移除车辆位置只能是car_position_1到5，对应位置0到4
+    df1['intersection_pos'] = df1['lane'].map(LANE_POS_MAP)
+    df1['queued_vehicles']  = df1.apply(count_queued_vehicles, axis=1)
+    df1['removed_vehicles_intidx']= -1
+    df1['removed_vehicles_multlabel']=  [[0]*miss_outdim for _ in range(len(df1))]
+    for i in range(20):
+        df1[f"car_gap_{i}"] = -1.0
+        df1[f"car_dv_{i}"] = -1.0
 
+    #for i in range(len(df1)):   
+    #    print(i,len(df1))
+    #    row = df1.iloc[i]
+    #    row1 = compute_gap_and_dv(row)
+    #    df1.iloc[i] = row1    
+    df1 = df1.apply(compute_gap_and_dv, axis=1)    
+    
+    #df1 = df1.swifter.apply(compute_gap_and_dv, axis=1)    
     # ===================== 2. 生成缺失数据样本 =====================
     # ===================== 3. 样本合并与过滤 =====================
     # 选择训练验证模式
@@ -885,38 +1094,28 @@ def main(args):
     else:
         logger.info("生成缺失车辆样本...")
         # 生成不同数量丢失车辆的样本
+        #print(df1.columns)
         df_missveh1 =  genSamplesRemovingVehicleWithOneSlot(df1)
-     
-        
+       
+       
         # 合并缺失样本
         #df_step2_missveh2 = pd.concat([
         #    df_missveh2_rn1, df_missveh2_rn2, 
         #    df_missveh2_rn3, df_missveh2_rn4
         #], ignore_index=True)
-        df_all = pd.concat([df1, df_missveh1], ignore_index=True)
+        #df_all = pd.concat([df1, df_missveh1], ignore_index=True)
+        df_all = df_missveh1 
     
     
-    # 添加路口位置列
-    df_all['intersection_pos'] = df_all['lane'].map(LANE_POS_MAP)
+  
 
     # 样本过滤（排队异常/丢失过多/消失时间过长）
     logger.info("开始样本过滤...")
-    def count_queued_vehicles(row):
-        """统计主车前方排队车辆数"""
-        pos_cols, _ = get_car_pos_speed_cols(row.index)
-        main_pos = row['main_car_position']
-        queued_count = 0
-        for col in pos_cols:
-            pos = row[col]
-            if pos != -1 and not pd.isna(pos) and pos > main_pos:
-                queued_count += 1
-        return queued_count
+  
 
-    # 计算排队车辆数
-    df_all['queued_vehicles'] = df_all.apply(count_queued_vehicles, axis=1)
     
     # 过滤条件
-    cond_queued = (df_all['queued_vehicles'] > 4) | (df_all['queued_vehicles'] < 1)
+    cond_queued = (df_all['queued_vehicles'] > 4) | (df_all['queued_vehicles'] == 0)
     cond_lost = df_all['lost'] >= 3
     cond_vanish = df_all['time_to_vanish'] > 35 * 30  # 还原原始时间
     cond_redTime = df_all['time_to_vanish'] < df_all['redLightRemainingTime']
@@ -968,36 +1167,60 @@ def main(args):
     feature_cols.append('main_car_speed')
     feature_cols.append('queued_vehicles')
     feature_cols.append('redLightRemainingTime')
-    raw_cols = feature_cols
+    
+    if args.trainvalmode == 1:
+        feature_cols = [f"car_gap_{i}" for i in range(20)] + [f"car_dv_{i}" for i in range(20)]
 
+    raw_cols = feature_cols
     # 数据转换
     X = df_fixed[feature_cols].values.astype(np.float32)
     y = (df_fixed['time_to_vanish'].values / 30.0).astype(np.float32)#注意这里训练样本的y/30,以秒为单位，后面还有log化
     raw_data_for_sim = df_fixed[raw_cols].values.astype(np.float32)
 
     y = np.log(y) #注意y对数化了---------------------------------------------------------------------这里y对数化了
-
     
-    # 1. 生成掩码：X 的所有特征有限 且 y 有限
-    mask = np.isfinite(X).all(axis=1) & np.isfinite(y)
+    if args.trainvalmode == 1:
+        yMissmultlabel = np.stack(df_fixed['removed_vehicles_multlabel'].values).astype(np.float32)
+        mask = np.isfinite(X).all(axis=1) 
+        print(f"清理完成：删除了 {(~mask).sum()} 条包含 NaN/Inf 的脏数据")
+    
+        # 3. 应用掩码过滤（同步过滤三个数组，保持维度一致）
+        X, yMissmultlabel, raw_data_for_sim = X[mask], yMissmultlabel[mask], raw_data_for_sim[mask]
 
-    # 2. 打印清理结果
-    print(f"清理完成：删除了 {(~mask).sum()} 条包含 NaN/Inf 的脏数据")
+        # 划分训练验证集
+        X_train, X_val, ymiss_train, ymiss_val, rawmiss_train, rawmiss_val = train_test_split(
+            X, yMissmultlabel, raw_data_for_sim, 
+            test_size=args.test_size, 
+            random_state=42
+        )
 
-    # 3. 应用掩码过滤（同步过滤三个数组，保持维度一致）
-    X, y, raw_data_for_sim = X[mask], y[mask], raw_data_for_sim[mask]
+        logger.info(
+            f"数据集构建完成 - 训练集: {len(X_train)} 样本, "
+            f"验证集: {len(X_val)} 样本"
+        )
+        
+        
+    else:
+        # 1. 生成掩码：X 的所有特征有限 且 y 有限
+        mask = np.isfinite(X).all(axis=1) & np.isfinite(y)
 
-    # 划分训练验证集
-    X_train, X_val, y_train, y_val, raw_train, raw_val = train_test_split(
-        X, y, raw_data_for_sim, 
-        test_size=args.test_size, 
-        random_state=42
-    )
+        # 2. 打印清理结果
+        print(f"清理完成：删除了 {(~mask).sum()} 条包含 NaN/Inf 的脏数据")
 
-    logger.info(
-        f"数据集构建完成 - 训练集: {len(X_train)} 样本, "
-        f"验证集: {len(X_val)} 样本"
-    )
+        # 3. 应用掩码过滤（同步过滤三个数组，保持维度一致）
+        X, y, raw_data_for_sim = X[mask], y[mask], raw_data_for_sim[mask]
+
+        # 划分训练验证集
+        X_train, X_val, y_train, y_val, raw_train, raw_val = train_test_split(
+            X, y, raw_data_for_sim, 
+            test_size=args.test_size, 
+            random_state=42
+        )
+
+        logger.info(
+            f"数据集构建完成 - 训练集: {len(X_train)} 样本, "
+            f"验证集: {len(X_val)} 样本"
+        )
 
     # ===================== 7. 模型训练 =====================
     dt = args.dt or DEFAULT_DT
@@ -1032,6 +1255,20 @@ def main(args):
             train_dataset, val_dataset, raw_cols,
             args, dt, raw_val=raw_val
         )
+    elif args.model == 2:
+        # 模型2：MLP+预测丢失slot的multlabel
+        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, ymiss_train))
+        train_dataset = train_dataset.batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+        
+        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, ymiss_val))
+        val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
+        
+        train_model_mlp_missonly(
+            X_train, ymiss_train, rawmiss_train,
+            train_dataset, val_dataset, raw_cols,
+            args, dt, raw_val=rawmiss_val
+        )
+    
 
     # 清理内存
     force_clean_all_memory()
