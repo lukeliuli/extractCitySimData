@@ -18,6 +18,7 @@ from tensorflow.keras.optimizers import Adam, Adadelta, SGD, Adamax, RMSprop, Ad
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.model_selection import train_test_split
 from sklearn.cluster import KMeans
+from tensorflow.keras.models import load_model
 #tf.debugging.enable_check_numerics() 
 # ===================== 本地模块导入 =====================
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -1049,6 +1050,86 @@ def compute_gap_and_dv(row):
     row["car_gap_19"]   = row['intersection_pos'] - row["car_position_19"]
     row["car_dv_19"]   =  row["car_speed_19"]
     return row
+
+
+#制作纯预测，模型从loadmodel加载后，直接调用vanish_prediction_log_real_time函数即可得到预测的消失时间
+def vanish_prediction_log_real_time(mlpw99cfModel,df_fixed,feature_cols,raw_cols, args,logger):
+        X_vanish = df_fixed[feature_cols].values.astype(np.float32)
+        y_vanish = (df_fixed['time_to_vanish'].values / 30.0).astype(np.float32)#注意这里训练样本的y/30,以秒为单位，后面还有log化
+        y_vanish_log = np.log(y_vanish) #注意y对数化了---------------------------------------------------------------------这里y对数化了
+        raw_data_for_sim = df_fixed[raw_cols].values.astype(np.float32)
+     
+        mask = np.isfinite(X_vanish).all(axis=1)
+
+        X_vanish, y_vanish_log, raw_data_for_sim = X_vanish[mask], y_vanish_log[mask], raw_data_for_sim[mask]
+
+        test_dataset = tf.data.Dataset.from_tensor_slices((X_vanish, y_vanish_log, raw_data_for_sim))
+        #根据上下文，用mlpw99cfModel预测test_dataset的消失时间,注意mlpw99cfModel里面有自定义的train_step和val_step函数       
+        # 创建预测数据集
+        test_dataset = tf.data.Dataset.from_tensor_slices((X_vanish, y_vanish_log, raw_data_for_sim))
+        test_dataset = test_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)    
+
+        vanish_predictions = []
+        vanish_actual = []
+    
+        for x_batch, y_batch, raw_batch in test_dataset:
+            # 使用mlpw99cfModel的验证步逻辑进行预测
+            nn_output = mlpw99cfModel(x_batch, training=False)
+            nn_output = tf.clip_by_value(nn_output, clip_value_min=0.01, clip_value_max=0.99)
+            
+            # 准备仿真参数
+            num_types = args.num_types
+            param_bounds = get_param_bounds(num_types)
+            
+            # 获取索引
+            pos_idx_list = [i for i, c in enumerate(raw_cols) if c.startswith("car_position_")]
+            speed_idx_list = [i for i, c in enumerate(raw_cols) if c.startswith("car_speed_")]
+            idx_main_car = raw_cols.index("main_car_position")
+            idx_inter = raw_cols.index("intersection_pos")
+            idx_red = raw_cols.index("redLightRemainingTime")
+            
+            tf_pos_idx = tf.constant(pos_idx_list, dtype=tf.int32)
+            tf_speed_idx = tf.constant(speed_idx_list, dtype=tf.int32)
+            tf_idx_main = tf.constant(idx_main_car, dtype=tf.int32)
+            tf_idx_inter = tf.constant(idx_inter, dtype=tf.int32)
+            tf_idx_red = tf.constant(idx_red, dtype=tf.int32)
+            
+            # 执行Wiedemann仿真
+            predicted_times = tf_wiedemann99_simulation(
+                nn_output, raw_batch, param_bounds, num_types,
+                tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
+                args.dt, args.goffset
+            )
+            
+            # 处理预测结果
+            batch_size = tf.shape(y_batch)[0]
+            predicted_times = tf.reshape(predicted_times, [batch_size])
+            predicted_times = tf.clip_by_value(predicted_times, 1e-7, 1e7)
+            
+            vanish_predictions.append(predicted_times.numpy())
+            vanish_actual.append(y_batch.numpy())
+        
+        # 计算评估指标
+        vanish_preds = np.concatenate(vanish_predictions)
+        vanish_true = np.concatenate(vanish_actual)
+        
+        # 在对数空间计算指标
+        mse_log = np.mean(np.square(vanish_preds - vanish_true))
+        rmse_log = np.sqrt(mse_log)
+        mae_log = np.mean(np.abs(vanish_preds - vanish_true))
+        
+        # 在原始时间空间计算指标
+        vanish_preds_real = np.exp(vanish_preds)
+        vanish_true_real = np.exp(vanish_true)
+        
+        mse_real = np.mean(np.square(vanish_preds_real - vanish_true_real))
+        rmse_real = np.sqrt(mse_real)
+        mae_real = np.mean(np.abs(vanish_preds_real - vanish_true_real))
+        
+        logger.info(f"预测结果 (对数空间) - MSE: {mse_log:.4f}, RMSE: {rmse_log:.4f}, MAE: {mae_log:.4f}")
+        logger.info(f"预测结果 (实际时间) - MSE: {mse_real:.4f}, RMSE: {rmse_real:.4f}, MAE: {mae_real:.4f}")
+
+     
 # ===================== 主函数 =====================
 #import swifter
 def main(args):
@@ -1103,7 +1184,7 @@ def main(args):
         #    df_missveh2_rn1, df_missveh2_rn2, 
         #    df_missveh2_rn3, df_missveh2_rn4
         #], ignore_index=True)
-        #df_all = pd.concat([df1, df_missveh1], ignore_index=True)
+        df_all = pd.concat([df1, df_missveh1], ignore_index=True)
         df_all = df_missveh1 
     
     
@@ -1150,26 +1231,27 @@ def main(args):
 
     # ===================== 5. 数据修补 =====================
     # ===================== 5. 数据修补 =====================
-    if args.fixdata > 0:
-        df_fixed = fix_missing_data(df_sampled, args.fixdata)
-    else:
-        df_fixed = df_sampled.copy()
-        logger.info("数据修补已禁用，直接使用抽样数据")
 
+ 
+    df_fixed = df_sampled.copy()
+    
     # ===================== 6. 数据集构建 =====================
     # 特征列和原始数据列
     # ===================== 6. 数据集构建 =====================
     # 特征列和原始数据列
     feature_cols = [f"car_position_{i}" for i in range(20)] + [f"car_speed_{i}" for i in range(20)]
+    
     feature_cols.append('intersection_pos')
     feature_cols.append('lane')
     feature_cols.append('main_car_position')
     feature_cols.append('main_car_speed')
     feature_cols.append('queued_vehicles')
     feature_cols.append('redLightRemainingTime')
+
+
+    feature_colsTmp = [f"car_gap_{i}" for i in range(20)] + [f"car_dv_{i}" for i in range(20)]
+    feature_cols.extend(feature_colsTmp)
     
-    if args.trainvalmode == 1:
-        feature_cols = [f"car_gap_{i}" for i in range(20)] + [f"car_dv_{i}" for i in range(20)]
 
     raw_cols = feature_cols
     # 数据转换
@@ -1180,27 +1262,28 @@ def main(args):
     y = np.log(y) #注意y对数化了---------------------------------------------------------------------这里y对数化了
     
     if args.trainvalmode == 1:
+        XMiss = X
         yMissmultlabel = np.stack(df_fixed['removed_vehicles_multlabel'].values).astype(np.float32)
         mask = np.isfinite(X).all(axis=1) 
         print(f"清理完成：删除了 {(~mask).sum()} 条包含 NaN/Inf 的脏数据")
     
         # 3. 应用掩码过滤（同步过滤三个数组，保持维度一致）
-        X, yMissmultlabel, raw_data_for_sim = X[mask], yMissmultlabel[mask], raw_data_for_sim[mask]
+        XMiss, yMissmultlabel, raw_data_for_sim = XMiss[mask], yMissmultlabel[mask], raw_data_for_sim[mask]
 
         # 划分训练验证集
-        X_train, X_val, ymiss_train, ymiss_val, rawmiss_train, rawmiss_val = train_test_split(
-            X, yMissmultlabel, raw_data_for_sim, 
+        Xmiss_train, Xmiss_val, ymiss_train, ymiss_val, rawmiss_train, rawmiss_val = train_test_split(
+            XMiss, yMissmultlabel, raw_data_for_sim, 
             test_size=args.test_size, 
             random_state=42
         )
 
         logger.info(
-            f"数据集构建完成 - 训练集: {len(X_train)} 样本, "
-            f"验证集: {len(X_val)} 样本"
+            f"slotLost数据集构建完成 - 训练集: {len(Xmiss_train)} 样本, "
+            f"验证集: {len(Xmiss_val)} 样本"
         )
         
         
-    else:
+    if args.trainvalmode == 0:
         # 1. 生成掩码：X 的所有特征有限 且 y 有限
         mask = np.isfinite(X).all(axis=1) & np.isfinite(y)
 
@@ -1218,7 +1301,7 @@ def main(args):
         )
 
         logger.info(
-            f"数据集构建完成 - 训练集: {len(X_train)} 样本, "
+            f"vanishTime数据集构建完成 - 训练集: {len(X_train)} 样本, "
             f"验证集: {len(X_val)} 样本"
         )
 
@@ -1268,7 +1351,88 @@ def main(args):
             train_dataset, val_dataset, raw_cols,
             args, dt, raw_val=rawmiss_val
         )
+    elif args.model == 3:
+        #只预测，不训练，最终实现slot和vanish的预测，slot预测使用训练好的mlp_multlabel模型，vanish预测使用训练好的mlp_cf模型
+        
+        if args.fixdata == 1 or args.fixdata == 2:
+            model_path = f"{DIR_TMP_MODEL}/model0_20260813_070524_epoch_250.h5"
+            mlpw99cfModel = load_model(model_path)
+            df_fixed = fix_missing_data(df_sampled, args.fixdata)
+            logger.info("args.fixdata == 1 or 2, 启用原始数据修补，使用原始数据进行slot位置修补和数据修补")
+            vanish_prediction_log_real_time(mlpw99cfModel,df_fixed,feature_cols,raw_cols, args,logger)
+            
+            
+        elif args.fixdata == 3:
+            # 1. 首先使用missModel预测哪些slot有丢失车辆
+            # 2. 根据预测结果确定需要修补的位置
+            # 3. 使用前后车偏移方法进行数据修补
+            model_path = f"{DIR_TMP_MODEL}/model_missvehmultlabel_20260816_222824.h5"
+            missModel = load_model(model_path)
+
+            model_path = f"{DIR_TMP_MODEL}/model0_20260813_070524_epoch_250.h5"
+            mlpw99cfModel = load_model(model_path)
+            
+            X_miss_input = df_sampled[feature_cols].values.astype(np.float32)
+            yMissmultlabel = np.stack(df_sampled['removed_vehicles_multlabel'].values).astype(np.float32)
+            mask = np.isfinite(X_miss_input).all(axis=1)
+            X_miss_input,yMissmultlabel = X_miss_input[mask],yMissmultlabel[mask]   
+            
+            # 预测丢失slot
+            miss_pred_dataset = tf.data.Dataset.from_tensor_slices((X_miss_input,yMissmultlabel))
+            miss_pred_dataset = miss_pred_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
+
+           
+            miss_pred_probs = []
+            miss_true_labels = []
+            for x_batch,y_batch in miss_pred_dataset:
+                pred_prob = missModel.predict_on_batch(x_batch)
+                miss_pred_probs.append(np.asarray(pred_prob))
+                miss_true_labels.append(y_batch.numpy())
+            
+            miss_pred_probs = np.concatenate(miss_pred_probs, axis=0)
+            miss_true_labels = np.concatenate(miss_true_labels, axis=0)
+            miss_pred_binary = (miss_pred_probs >= 0.5).astype(int)
+            
+            # 根据预测结果修补数据
+            df_fixed = df_sampled[mask].copy().reset_index(drop=True)
+            for idx, pred_labels in enumerate(miss_pred_binary):
+                # 对于每个预测为1的slot，查找并修补数据，只会有一个
+                #注意这里根据模型和数据，slot_i 智能是0,1,2,3,4,5其中之一.而且只会有一个为1. 
+                for slot_i in range(pred_labels.shape[0]):
+                    if pred_labels[slot_i] == 1:
+                        #slot 0,1,2,3,4 对应car_position0~1之间,1~2之间,...,4到5之间
+                        # 前提car_position0~19已经按照从小到大排列                  
+                       
+                        speedlist = [df_fixed.at[idx, f'car_speed_{j}'] for j in range(0,20)]
+                        poslist = [df_fixed.at[idx, f'car_position_{j}'] for j in range(0,20)]
+                        poslist.insert(slot_i+1, poslist[slot_i+1]-5) # slot_i如果为0，就插到index为1的位置，也就是slot_i+1.
+                        speedlist.insert(slot_i+1, speedlist[slot_i+1])# speedlist长度会增加到21吗
+                        for k in range(0,20):
+                            car_pos_col = f'car_position_{k}'
+                            car_speed_col = f'car_speed_{k}'
+                            df_fixed.at[idx,car_pos_col] = poslist[k]
+                            df_fixed.at[idx,car_speed_col] = speedlist[k]
+                        break #对于每个预测为1的slot，查找并修补数据，只会有一个
     
+            
+            logger.info(f"模型预测修补完成，处理了 {len(df_fixed)} 个样本")
+            
+            # 然后使用修补后的数据进行消失时间预测
+            vanish_prediction_log_real_time(mlpw99cfModel,df_fixed,feature_cols,raw_cols, args,logger)
+            
+           
+
+        else:
+            logger.info("args.fixdata 参数不合法 or args.fixdata == 0, 不进行数据修补，直接使用原始数据进行预测") 
+            df_fixed = df_sampled  
+            model_path = f"{DIR_TMP_MODEL}/model0_20260813_070524_epoch_250.h5"
+            mlpw99cfModel = load_model(model_path)
+            vanish_prediction_log_real_time(mlpw99cfModel,df_fixed,feature_cols,raw_cols, args,logger)
+            
+        
+
+            
+
 
     # 清理内存
     force_clean_all_memory()
@@ -1280,7 +1444,7 @@ if __name__ == "__main__":
     log_dir = "./profiler_records"
     os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
     tf.profiler.experimental.server.start(6009)
-    #tf.profiler.experimental.start(log_dir)
+    tf.profiler.experimental.start(log_dir)
 
     # 命令行参数解析
     parser = argparse.ArgumentParser(description="使用Keras和交通仿真进行端到端模型训练")
@@ -1297,10 +1461,10 @@ if __name__ == "__main__":
     parser.add_argument('--debug', action='store_true', help='启用Debug级别的日志信息')
     parser.add_argument('--dt', type=float, default=DEFAULT_DT, help='仿真时间步长')
     parser.add_argument('--nC', type=int, default=1000, help='抽样样本数量')
-    parser.add_argument('--model', type=int, default=0, help='0(MLP+CF),1(MLP+Regress)')
-    parser.add_argument('--fixdata', type=int, default=0, help='0(不修补),1(原始数据补),2(前后车偏移补)')
+    parser.add_argument('--model', type=int, default=0, help='0(MLP+CF),1(MLP+Regress),2(MLP+预测丢失slot的multlabel),3(丢失slot+vanish时间联合)')
+    parser.add_argument('--fixdata', type=int, default=0, help='0(不修补),1(原始数据补),2(前后车偏移补),3 模型预测修补，前后车偏移补')
     parser.add_argument('--goffset', type=int, default=1, help='仿真全局偏移参数开关')
-    parser.add_argument('--trainvalmode', type=int, default=0, help='0(无丢失),1(有丢失)')
+    parser.add_argument('--trainvalmode', type=int, default=0, help='0(无丢失,只有vanish),1(有丢失,有misss数据)')
    
 
     args = parser.parse_args()

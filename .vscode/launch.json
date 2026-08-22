@@ -5,14 +5,55 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python Debugger: Python File",
+            "name": "Python Debugger:SSH+Conda_py39_tf215_gpu+Model9W99_model0",//VS远程通过SSH登录远程服务器修改源代码，并且在conda环境下运行程序
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
             // 自动继承 VS Code 选中的 Conda 解释器路径
             //"python": "${command:python.interpreterPath}"
-            "python": "/home/liuli/miniconda3/envs/py37-tf22gpu/bin/python" 
+            "python": "/home/liuli/miniconda3/envs/py39_tf215_gpu/bin/python3",
+            "cwd": "${fileDirname}",  // 设置为当前文件所在目录
+             "args":[
+                "--batch_size", "300",
+                "--test_size", "0.85",
+                "--epochs", "300",
+                "--lr", "0.0002",
+                "--unit", "256",
+                "--layNum", "128",
+                "--dt", "0.1",
+                "--nC", "0",
+                "--model", "0",
+                "--fixdata", "0",
+                "--trainvalmode", "0",
+                "--goffset", "1"
+            ]
         },
+
+               {
+            "name": "Python Debugger:SSH+Conda_py39_tf215_gpu+Model9W99_model3",//VS远程通过SSH登录远程服务器修改源代码，并且在conda环境下运行程序
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            // 自动继承 VS Code 选中的 Conda 解释器路径
+            //"python": "${command:python.interpreterPath}"
+            "python": "/home/liuli/miniconda3/envs/py39_tf215_gpu/bin/python3",
+            "cwd": "${fileDirname}",  // 设置为当前文件所在目录
+             "args":[
+                "--batch_size", "300",
+                "--test_size", "0.85",
+                "--epochs", "300",
+                "--lr", "0.0002",
+                "--unit", "256",
+                "--layNum", "128",
+                "--dt", "0.1",
+                "--nC", "0",
+                "--model", "3",
+                "--fixdata", "3",
+                "--trainvalmode", "1",
+                "--goffset", "1"
+            ]
+        },
+
 
         {
             "name": "Python: Attach to debugpy (远程训练)",
