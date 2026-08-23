@@ -911,7 +911,7 @@ def main(args):
         queued_count = 0
         for col in pos_cols:
             pos = row[col]
-            if pos != -1 and not pd.isna(pos) and pos < main_pos:
+            if pos != -1 and not pd.isna(pos) and pos > main_pos:
                 queued_count += 1
         return queued_count
 

@@ -1,0 +1,7 @@
+1.matpool训练
+2.最终
+2026-08-22 18:18:45 [INFO] - Validation Results - RMSE: 0.5079, MAE: 0.3088, MSE: 0.2384
+2026-08-22 18:18:45 [INFO] - Validation Results (Real Time) - MSE: 17.8553, RMSE: 4.2256, MAE: 3.4710
+3.featurecol加cap,dv
+4.adamW
+python modelsCollect9WIED99Lost.py --batch_size 700 --test_size 0.85 --epochs 300 --lr 0.0002 --unit 256 --layNum 128 --dt 0.1 --nC 5000  --model 0 --fixdata 0 --trainvalmode 0 --goffset 1
