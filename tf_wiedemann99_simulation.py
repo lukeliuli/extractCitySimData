@@ -65,13 +65,13 @@ def tf_wiedemann99_simulation(
     
    
     # 正确提取每列参数（关键修复：real_params[:, i] 而非整个矩阵）
-    tf.print("---------- real_param[0,0,:]:", real_params[0,0,:], summarize=-1)  # 跟车时距
+    #tf.print("---------- real_param[0,0,:]:", real_params[0,0,:], summarize=-1)  # 跟车时距
 
   
     # --- 修正版调试代码 END -
     # 偏移量处理 (与FVDM一致)
     offsets = [scene_offset_full[:, i] for i in range(10)]
-    offset_scales = [2.0, 8.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
+    offset_scales = [2.0, 8.0, 2.0, 5.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
     offset_shifts = [-1.0, 0.0, -1.0, 0.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
     processed_offsets = []
     for offset, scale, shift in zip(offsets, offset_scales, offset_shifts):
@@ -90,7 +90,7 @@ def tf_wiedemann99_simulation(
     mask_invalid = tf.equal(car_positions, -1.0)
     rand_neg_pos = tf.random.uniform(shape=tf.shape(car_positions), minval=-5000.0, maxval=-100.0, dtype=tf.float32)
     car_positions = tf.where(mask_invalid, rand_neg_pos, car_positions)
-    init_vanished = mask_invalid
+    init_vanished = mask_invalid #位置为-1的，直接认定已经vanish对应位置为true
     
     #car_positions += vehpos_offset[:, None]
     inter_pos += redlightpos_offset
@@ -119,7 +119,7 @@ def tf_wiedemann99_simulation(
         # 计算相对变量 (恢复原序)
         gap_raw = pos_sorted[:, :-1] - pos_sorted[:, 1:] - cc0[:, :-1] # AX作为车长/停车间距
         gap_raw = tf.maximum(gap_raw, 0.1)
-        gap_pad = tf.pad(gap_raw, [[0, 0], [1, 0]], constant_values=1000.0)
+        gap_pad = tf.pad(gap_raw, [[0, 0], [1, 0]], constant_values=100.0)
         gap = tf.gather(gap_pad, inv_idx, batch_dims=1)
         
         dv_raw = vel_sorted[:, :-1] - vel_sorted[:, 1:]
@@ -185,7 +185,7 @@ def tf_wiedemann99_simulation(
         pos_new = tf.where(mask_pos_valid, pos_in + vel_new * dt, pos_in)
         
         # 6. 消失判定
-        new_vanish = (pos_new > inter_pos[:, None] + 2.0) & ~vanished_in
+        new_vanish = (pos_new > inter_pos[:, None]) & ~vanished_in
         step_sec = tf.cast(step, tf.float32) * dt
         time_new = tf.where(new_vanish, step_sec, time_in)
         vanished_new = tf.logical_or(vanished_in, new_vanish)

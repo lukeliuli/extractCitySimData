@@ -29,7 +29,8 @@ from modelsLostReg import (
     genDatasetLost,
     genSamplesByRandomRemovingVehicle,
     genSamplesRemovingVehicleWithNum,
-    genSamplesRemovingVehicleWithOneSlot
+    genSamplesRemovingVehicleWithOneSlot,
+    count_queued_vehicles
 )
 
 # ===================== 全局常量定义（统一修改入口） =====================
@@ -169,6 +170,8 @@ def setup_logger(log_path, debug=False):
         logger.handlers.clear()
 
     # 文件处理器
+    timestamp = generate_timestamp()
+    log_path = f"trainlog_{timestamp}.log"
     file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
     file_handler.setLevel(log_level)
     file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
@@ -197,13 +200,13 @@ def get_sample_indices(df, num_samples):
     
     # KMeans聚类保证样本多样性
     sample_features = df[[c for c in df.columns if 'car_position_' in c or 'car_speed_' in c]].values
-    n_clusters = min(DEFAULT_N_CLUSTERS, len(df) // 10)
+    n_clusters = min(DEFAULT_N_CLUSTERS, len(df) // 50)
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=30)
     cluster_labels = kmeans.fit_predict(sample_features)
     
     sampled_indices = []
     # 1/2 聚类抽样
-    cluster_sample_num = max(1, int(num_samples / 2 / n_clusters))
+    cluster_sample_num = max(1, int(num_samples / n_clusters))
     for cluster in range(n_clusters):
         cluster_idx = np.where(cluster_labels == cluster)[0]
         if len(cluster_idx) > 0:
@@ -213,26 +216,29 @@ def get_sample_indices(df, num_samples):
                 replace=False
             )
             sampled_indices.extend(chosen)
+    logging.info(f"n_clusters:{n_clusters},kmeans_samples:{len(sampled_indices)}")
+    # 补齐
     
-    # 1/2 lost加权抽样补齐
+    
     if len(sampled_indices) < num_samples:
         remaining = list(set(range(len(df))) - set(sampled_indices))
         if remaining:
-            lost_vals = df['lost'].iloc[remaining].fillna(0).astype(float).values
-            weights = 1.0 + lost_vals * OVERSAMPLE_FACTOR
-            probs = weights / np.sum(weights)
+            #lost_vals = df['lost'].iloc[remaining].fillna(0).astype(float).values
+            #weights = 1.0 + lost_vals * OVERSAMPLE_FACTOR
+            #probs = weights / np.sum(weights)
             
             extra_num = num_samples - len(sampled_indices)
             extra = np.random.choice(
                 remaining, 
                 size=extra_num, 
                 replace=False, 
-                p=probs
             )
             sampled_indices.extend(extra)
     
+    
     # 截断到指定数量并去重
-    sampled_indices = list(dict.fromkeys(sampled_indices))[:num_samples]
+    #sampled_indices = list(dict.fromkeys(sampled_indices))[:num_samples]
+    logging.info(f"Random_ReSamples:{len(extra)},samples:{len(sampled_indices)}")
     return sampled_indices
 
 # ===================== 网络模型定义 =====================
@@ -455,13 +461,33 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     param_bounds = get_param_bounds(num_types)
     
     # 优化器配置
+    steps_per_epoch = max(1, len(X_train) // args.batch_size)
+    total_steps = steps_per_epoch * args.epochs
     lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        args.lr, decay_steps=200, decay_rate=0.99, staircase=True
+        args.lr, decay_steps=total_steps-10, decay_rate=0.99, staircase=True
     )
     #optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
     #optimizer = Adam(learning_rate=args.lr, clipnorm=1.0)
-    optimizer = AdamW(learning_rate=args.lr, weight_decay=1e-5,clipnorm=1.0)
-    optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5,clipnorm=1.0)
+    optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5) #现阶段比较好
+        # 优化器配置：线性warmup + 余弦退火，步数按当前数据量与batch_size自适应
+
+
+    #
+
+    # 优化器配置：余弦退火
+    steps_per_epoch = max(1, len(X_train) // args.batch_size)
+    total_steps = steps_per_epoch * args.epochs
+
+    lr_schedule = tf.keras.optimizers.schedules.CosineDecay(
+        initial_learning_rate=args.lr,
+        decay_steps=total_steps,
+        alpha=args.lr * 0.01
+    )
+    # 梯度裁剪已在train_step中用tf.clip_by_global_norm处理，此处不再重复clipnorm
+    #optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
+    logging.info(f"LR调度: steps_per_epoch={steps_per_epoch}, total_steps={total_steps}, base_lr={args.lr}")
+
+   
 
 
     # 替换原有的 AdamW
@@ -504,7 +530,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         """训练步（TF函数装饰，减少重追踪）"""
         with tf.GradientTape() as tape:
             nn_output = model(x_batch, training=True)
-            nn_output = tf.clip_by_value(nn_output, clip_value_min=0.001, clip_value_max=0.999) 
+            nn_output = tf.clip_by_value(nn_output, clip_value_min=0.01, clip_value_max=0.99) 
             # 1. 检查是否有 NaN 或 Inf (如果有，说明前向传播就炸了)
             #has_nan = tf.reduce_any(tf.math.is_nan(nn_output))
             #has_inf = tf.reduce_any(tf.math.is_inf(nn_output))
@@ -523,8 +549,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
            
             
             # 2. 对预测值取对数
-            safe_predicted_times = tf.maximum(predicted_times, 1e-7)
-            predicted_times = tf.math.log(safe_predicted_times)
+            #safe_predicted_times = tf.maximum(predicted_times, 1e-7)
+            #predicted_times = tf.math.log(safe_predicted_times)
 
             is_finite = tf.reduce_all(tf.math.is_finite(predicted_times))
             # 若存在 NaN/Inf，则用当前 batch 的均值（或固定常数）替代，避免梯度污染
@@ -572,8 +598,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         batch_size = tf.shape(y_batch)[0]
         predicted_times = tf.reshape(predicted_times, [batch_size])
         #对预测值取对数
-        safe_predicted_times = tf.maximum(predicted_times, 1e-7)
-        predicted_times = tf.math.log(safe_predicted_times)
+        #safe_predicted_times = tf.maximum(predicted_times, 1e-7)
+        #predicted_times = tf.math.log(safe_predicted_times)
         
         y_batch = tf.reshape(y_batch, [batch_size])
         return predicted_times - y_batch,predicted_times
@@ -587,8 +613,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         epoch_loss_avg = tf.keras.metrics.Mean()
         batch_idx = 0
 
-        val_trues = []
-        val_preds = []
+        train_trues = []
+        train_preds = []
         for x_batch, y_batch, raw_batch in train_dataset:
             #tf.debugging.assert_all_finite(x_batch, message="x_batch 输入数据包含 NaN 或 Inf!")
             
@@ -604,8 +630,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 f"| Time: {t1-t0:.2f}s | Remain: {rem_batches}"
             )
 
-            val_trues.append(y_batch.numpy())
-            val_preds.append(pred_y.numpy())
+            train_trues.append(y_batch.numpy())
+            train_preds.append(pred_y.numpy())
 
       
 
@@ -615,43 +641,31 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         logging.info(f"Epoch {epoch+1} Average Loss: {epoch_loss:.4f}")
 
         # 实际时间空间,计算验证指标
-        val_preds_log = np.concatenate([p.flatten() for p in val_preds])
-        val_trues_log = np.concatenate([t.flatten() for t in val_trues])
+        train_preds = np.concatenate([p.flatten() for p in train_preds])
+        train_trues = np.concatenate([t.flatten() for t in train_trues])
 
-        val_preds_real = np.exp(val_preds_log)
-        val_trues_real = np.exp(val_trues_log)
-        # 在【实际时间空间】下计算物理指标
-        val_errs_real = val_preds_real - val_trues_real
-        val_mse = np.mean(np.square(val_errs_real))
-        val_rmse = np.sqrt(val_mse)
-        val_mae = np.mean(np.abs(val_errs_real))
+       
+        
+        errs= train_preds - train_trues
+        train_mse = np.mean(np.square(errs))
+        train_rmse = np.sqrt(train_mse)
+        train_mae = np.mean(np.abs(errs))
 
         logging.info(
-            f"Trainning Results (Real Time) - MSE: {val_mse:.4f}, "
-            f"RMSE: {val_rmse:.4f}, MAE: {val_mae:.4f}")
-        del  val_trues
-        del  val_preds
+            f"Trainning Results (Real Time) - MSE: {train_mse:.4f}, "
+            f"RMSE: {train_rmse:.4f}, MAE: {train_mae:.4f}")
+   
         #--------------------------------------------- 验证逻辑
-        if epoch % 5 == 4 or epoch == args.epochs - 1:
-            logging.info("===== 验证阶段开始 =====")
+        if epoch % 10 == 0 or epoch == args.epochs - 1:
+            logging.info("\n===== 验证阶段开始 =====")
             val_errs = []
-            val_loss_metric = tf.keras.metrics.Mean()
-            
-            val_trues = []
-            val_preds = []
+            val_loss_metric = tf.keras.metrics.Mean()           
+         
             for xb, yb, rb in val_dataset:
                 errs,pred_y = val_step(xb, yb, rb)
                 enp = errs.numpy()
                 val_errs.append(enp)
                 val_loss_metric.update_state(np.mean(np.square(enp)))
-
-                # 收集对数空间下的真实值和预测值，用于后续还原
-
-                val_trues.append(yb.numpy())
-                val_preds.append(pred_y.numpy())
-                
-                # 在对数空间下计算 Loss
-                val_loss_metric.update_state(np.mean(np.square(errs.numpy())))
 
 
             # 计算验证指标
@@ -659,31 +673,13 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             val_rmse = np.sqrt(np.mean(np.square(val_errs)))
             val_mae = np.mean(np.abs(val_errs))
 
-
-            
-            
             logging.info(
                 f"Validation Results - RMSE: {val_rmse:.4f}, "
-                f"MAE: {val_mae:.4f}, MSE: {val_loss_metric.result().numpy():.4f}"
+                f"MAE: {val_mae:.4f}, MSE: {val_loss_metric.result().numpy():.4f}\n\n"
             )
 
-             # 实际时间空间,计算验证指标
-            val_preds_log = np.concatenate([p.flatten() for p in val_preds])
-            val_trues_log = np.concatenate([t.flatten() for t in val_trues])
-             
-            val_preds_real = np.exp(val_preds_log)
-            val_trues_real = np.exp(val_trues_log)
-             # 在【实际时间空间】下计算物理指标
-            val_errs_real = val_preds_real - val_trues_real
-            val_mse = np.mean(np.square(val_errs_real))
-            val_rmse = np.sqrt(val_mse)
-            val_mae = np.mean(np.abs(val_errs_real))
-            
-            logging.info(
-                f"Validation Results (Real Time) - MSE: {val_mse:.4f}, "
-                f"RMSE: {val_rmse:.4f}, MAE: {val_mae:.4f}")
-            del  val_trues
-            del  val_preds
+     
+    
 
             gc.collect()
 
@@ -704,36 +700,10 @@ def make_inverse_log_mse_callback(model, val_dataset, log_offset=1e-8):
 
     def on_epoch_end(epoch, logs=None):
 
-        if epoch%20 != 1:
+        if epoch%5 != 1:
             return 
-
-        val_trues = []
-        val_preds = []
-        for X_batch, y_batch in val_dataset:
-            pred = model(X_batch, training=False)  
-            val_trues.append(y_batch.numpy())
-            val_preds.append(pred.numpy())
-
-
-        val_preds_log = np.concatenate([p.flatten() for p in val_preds])
-        val_trues_log = np.concatenate([t.flatten() for t in val_trues]) 
-        val_preds_log = np.clip(val_preds_log,-5,5)
-        val_trues_log = np.clip(val_trues_log,-5,5)
-
-        val_preds_real = np.exp(val_preds_log)
-        val_trues_real = np.exp(val_trues_log)
-
-        val_errs_real = val_preds_real - val_trues_real
-        val_mae_real = np.mean(np.abs(val_errs_real))
-        
-        
-
-        history.append(val_mae_real )
-        logging.info(f"\n $$ val_mae_real: { val_mae_real:.4f}")
-        logging.info(f"\n $$ val_mae_real: { val_mae_real:.4f}")
-        logging.info(f"\n $$ val_mae_real: { val_mae_real:.4f}")
     cb = LambdaCallback(on_epoch_end=on_epoch_end)
-    cb.inverse_log_mse_history = history
+   
     return cb
 
 def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt, raw_val=None):
@@ -937,93 +907,51 @@ def fix_missing_data(df, fix_type):
     :return: 修补后的数据
     """
     if fix_type == 0:
-        lost_count = len(df.index[df['lost'] == 1])
+        lost_count = len(df.index[df['lost'] > 0])
         logging.info(f"不修补数据，采样样本数: {len(df)}, 缺失样本数: {lost_count}")
         return df
     
     # 获取丢失样本索引
     lost_indices = df.index[df['lost'] > 0].tolist()
     logging.info(f"开始修补数据，共 {len(lost_indices)} 个缺失样本，修补类型: {fix_type}")
-
+   
+    # 方法1：直接前车-5
     if fix_type == 1:
-        # 方法1：直接用原始数据补
+        df_fixed = df
         for idx in lost_indices:
-            removed_vehs = df.at[idx, 'removed_vehicles']
-            for car_pos_col, car_pos, car_pos_i in removed_vehs:
-                # 补位置
-                df.at[idx, f'car_position_{car_pos_i}'] = car_pos
-                # 补速度（取前车速度）
-                car_speed_i = max(0, car_pos_i - 1)
-                df.at[idx, f'car_speed_{car_pos_i}'] = df.at[idx, f'car_speed_{car_speed_i}']
+            removeVehCol = df.at[idx, 'removed_vehicles'] #car_pos_1~5
+            removeIntidx =   df.at[idx,'removed_vehicles_intidx'] # 1~5
+            speedlist = [df_fixed.at[idx, f'car_speed_{j}'] for j in range(0,20)]
+            poslist = [df_fixed.at[idx, f'car_position_{j}'] for j in range(0,20)]
+            poslist.insert(removeIntidx, poslist[removeIntidx]-5) # 例如插入原来的removeIntidx = 1的位置，那样原来car_position_1 变为2
+            speedlist.insert(removeIntidx, speedlist[removeIntidx])# speedlist长度会增加到21吗
+            for k in range(0,20):
+                car_pos_col = f'car_position_{k}'
+                car_speed_col = f'car_speed_{k}'
+                df_fixed.at[idx,car_pos_col] = poslist[k]
+                df_fixed.at[idx,car_speed_col] = speedlist[k]
 
     elif fix_type == 2:
-        # 方法2：前后车偏移补
         for idx in lost_indices:
-            # 获取当前样本有效车辆位置和速度
-            pos_cols, speed_cols = get_car_pos_speed_cols(df.columns)
-            valid_positions = []
-            valid_speeds = []
-            
-            for pos_col, speed_col in zip(pos_cols, speed_cols):
-                pos_val = df.at[idx, pos_col]
-                if pos_val != -1:
-                    valid_positions.append(pos_val)
-                    valid_speeds.append(df.at[idx, speed_col])
-            
-            if not valid_positions:
-                continue
-
-            # 按位置排序丢失车辆
-            removed_vehs = df.at[idx, 'removed_vehicles']
-            removed_sorted = sorted(removed_vehs, key=lambda x: x[1])
-
-            for _, orig_car_pos, car_pos_i in removed_sorted:
-                # 找最近车辆
-                valid_arr = np.array(valid_positions)
-                nearest_idx = np.argmin(np.abs(valid_arr - orig_car_pos))
-                nearest_pos = valid_arr[nearest_idx]
-                nearest_speed = valid_speeds[nearest_idx]
-
-                # 计算新位置
-                if orig_car_pos > nearest_pos:
-                    new_pos = nearest_pos + OFFSET_DISTANCE
-                else:
-                    new_pos = nearest_pos - OFFSET_DISTANCE
-
-                # 避免重叠
-                if abs(new_pos - nearest_pos) < MIN_GAP:
-                    new_pos = (
-                        nearest_pos + MIN_GAP 
-                        if orig_car_pos > nearest_pos 
-                        else nearest_pos - MIN_GAP
-                    )
-
-                # 写入数据
-                df.at[idx, f'car_position_{car_pos_i}'] = new_pos
-                df.at[idx, f'car_speed_{car_pos_i}'] = nearest_speed
-
-                # 更新有效列表
-                valid_positions.append(new_pos)
-                valid_speeds.append(nearest_speed)
-                # 保持有序
-                combined = sorted(zip(valid_positions, valid_speeds), key=lambda x: x[0])
-                valid_positions, valid_speeds = zip(*combined) if combined else ([], [])
-                valid_positions = list(valid_positions)
-                valid_speeds = list(valid_speeds)
+            removeVehCol = df.at[idx, 'removed_vehicles'] #car_pos_1~5
+            removeIntidx =   df.at[idx,'removed_vehicles_intidx'] # 1~5
+            speedlist = [df_fixed.at[idx, f'car_speed_{j}'] for j in range(0,20)]
+            poslist = [df_fixed.at[idx, f'car_position_{j}'] for j in range(0,20)]
+            posFront = poslist[removeIntidx]
+            posBeh = poslist[removeIntidx-1]
+            posValueinsert = (posFront+posBeh)/2
+            poslist.insert(removeIntidx, posValueinsert) # 例如插入原来的removeIntidx = 1的位置，那样原来car_position_1 变为2
+            speedlist.insert(removeIntidx, speedlist[removeIntidx])# speedlist长度会增加到21吗
+            for k in range(0,20):
+                car_pos_col = f'car_position_{k}'
+                car_speed_col = f'car_speed_{k}'
+                df_fixed.at[idx,car_pos_col] = poslist[k]
+                df_fixed.at[idx,car_speed_col] = speedlist[k]
 
     logging.info(f"数据修补完成，共处理 {len(lost_indices)} 个缺失样本")
     return df
 
-def count_queued_vehicles(row):
-            """统计主车前方排队车辆数"""
-            pos_cols, _ = get_car_pos_speed_cols(row.index)
-            main_pos = row['main_car_position']
-            queued_count = 0
-            for col in pos_cols:
-                pos = row[col]
-                if pos != -1 and not pd.isna(pos) and pos > main_pos:
-                    queued_count += 1
-            return queued_count
+
 def compute_gap_and_dv(row):
     #数据中，已经假定car_position_0,位置最小，car_position_19位置最大。随着index增大，位置增大。最大只有20辆车，car_position_19假定最接近该车道消失线
     for i in range(19):
@@ -1052,26 +980,30 @@ def compute_gap_and_dv(row):
            row[gap_col] = front_pos - pos
            row[dv_col] =  row[front_speed_col] - row[speed_col]
 
-    row["car_gap_19"]   = row['intersection_pos'] - row["car_position_19"]
-    row["car_dv_19"]   =  row["car_speed_19"]
+    if row["car_position_19"] == -1:      
+        row["car_gap_19"]   = -1
+        row["car_dv_19"]   =  -1
+    else:
+        row["car_gap_19"]   = row['intersection_pos'] - row["car_position_19"]
+        row["car_dv_19"]   =  row["car_speed_19"]
     return row
 
 
 #制作纯预测，模型从loadmodel加载后，直接调用vanish_prediction_log_real_time函数即可得到预测的消失时间
-def vanish_prediction_log_real_time(mlpw99cfModel,df_fixed,feature_cols,raw_cols, args,logger):
+def vanish_prediction_realtime_cf(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger):
         X_vanish = df_fixed[feature_cols].values.astype(np.float32)
         y_vanish = (df_fixed['time_to_vanish'].values / 30.0).astype(np.float32)#注意这里训练样本的y/30,以秒为单位，后面还有log化
-        y_vanish_log = np.log(y_vanish) #注意y对数化了---------------------------------------------------------------------这里y对数化了
+        #y_vanish_log = np.log(y_vanish) #注意y对数化了---------------------------------------------------------------------这里y对数化了
         raw_data_for_sim = df_fixed[raw_cols].values.astype(np.float32)
      
         mask = np.isfinite(X_vanish).all(axis=1)
 
-        X_vanish, y_vanish_log, raw_data_for_sim = X_vanish[mask], y_vanish_log[mask], raw_data_for_sim[mask]
+        X_vanish, y_vanish, raw_data_for_sim = X_vanish[mask], y_vanish[mask], raw_data_for_sim[mask]
 
-        test_dataset = tf.data.Dataset.from_tensor_slices((X_vanish, y_vanish_log, raw_data_for_sim))
+        test_dataset = tf.data.Dataset.from_tensor_slices((X_vanish, y_vanish, raw_data_for_sim))
         #根据上下文，用mlpw99cfModel预测test_dataset的消失时间,注意mlpw99cfModel里面有自定义的train_step和val_step函数       
         # 创建预测数据集
-        test_dataset = tf.data.Dataset.from_tensor_slices((X_vanish, y_vanish_log, raw_data_for_sim))
+        test_dataset = tf.data.Dataset.from_tensor_slices((X_vanish, y_vanish, raw_data_for_sim))
         test_dataset = test_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)    
 
         vanish_predictions = []
@@ -1079,7 +1011,7 @@ def vanish_prediction_log_real_time(mlpw99cfModel,df_fixed,feature_cols,raw_cols
     
         for x_batch, y_batch, raw_batch in test_dataset:
             # 使用mlpw99cfModel的验证步逻辑进行预测
-            nn_output = mlpw99cfModel(x_batch, training=False)
+            nn_output = modelVanishPredict(x_batch, training=False)
             nn_output = tf.clip_by_value(nn_output, clip_value_min=0.01, clip_value_max=0.99)
             
             # 准备仿真参数
@@ -1117,22 +1049,34 @@ def vanish_prediction_log_real_time(mlpw99cfModel,df_fixed,feature_cols,raw_cols
         # 计算评估指标
         vanish_preds = np.concatenate(vanish_predictions)
         vanish_true = np.concatenate(vanish_actual)
-        
-        # 在对数空间计算指标
-        mse_log = np.mean(np.square(vanish_preds - vanish_true))
-        rmse_log = np.sqrt(mse_log)
-        mae_log = np.mean(np.abs(vanish_preds - vanish_true))
-        
-        # 在原始时间空间计算指标
-        vanish_preds_real = np.exp(vanish_preds)
-        vanish_true_real = np.exp(vanish_true)
+        vanish_preds_real = vanish_preds
+        vanish_true_real = vanish_true
         
         mse_real = np.mean(np.square(vanish_preds_real - vanish_true_real))
         rmse_real = np.sqrt(mse_real)
-        mae_real = np.mean(np.abs(vanish_preds_real - vanish_true_real))
-        
-        logger.info(f"预测结果 (对数空间) - MSE: {mse_log:.4f}, RMSE: {rmse_log:.4f}, MAE: {mae_log:.4f}")
+        mae_real = np.mean(np.abs(vanish_preds_real - vanish_true_real))        
+       
         logger.info(f"预测结果 (实际时间) - MSE: {mse_real:.4f}, RMSE: {rmse_real:.4f}, MAE: {mae_real:.4f}")
+
+def vanish_prediction_realtime_reg(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger):
+        X_vanish = df_fixed[feature_cols].values.astype(np.float32)
+        y_vanish = (df_fixed['time_to_vanish'].values / 30.0).astype(np.float32)#注意这里训练样本的y/30,以秒为单位，后面还有log化
+        #y_vanish_log = np.log(y_vanish) #注意y对数化了---------------------------------------------------------------------这里y对数化了
+        raw_data_for_sim = df_fixed[raw_cols].values.astype(np.float32)
+     
+        mask = np.isfinite(X_vanish).all(axis=1)
+
+        X_vanish, y_vanish, raw_data_for_sim = X_vanish[mask], y_vanish[mask], raw_data_for_sim[mask]
+
+        val_dataset = tf.data.Dataset.from_tensor_slices((X_vanish, y_vanish))
+        val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
+        val_loss, val_mae, val_rmse = modelVanishPredict.evaluate(val_dataset, verbose=0)
+     
+        logger.info(
+            f"Validation Set - MAE: {val_mae:.4f}, MSE: {val_loss:.4f}, RMSE: {val_rmse:.4f}"
+        )
+
+        
 
      
 # ===================== 主函数 =====================
@@ -1224,13 +1168,11 @@ def main(args):
         args.nC = len(df_all)
         df_sampled = df_all.copy()
     else:
-        logger.info(f"开始样本抽样，目标数量: {args.nC}")
+        logger.info(f"开始样本抽样，样本目标数量: {args.nC}")
         sampled_indices = get_sample_indices(df_all, args.nC)
         df_sampled = df_all.iloc[sampled_indices].reset_index(drop=True)
         logger.info(
-            f"抽样完成 - 最终样本数: {len(df_sampled)}, "
-            f"聚类抽样数: {min(len(sampled_indices)//2, args.nC//2)}, "
-            f"加权补充数: {max(0, len(sampled_indices) - args.nC//2)}"
+            f"抽样完成 - 最终样本数: {len(df_sampled)}"
         )
 
 
@@ -1264,7 +1206,7 @@ def main(args):
     y = (df_fixed['time_to_vanish'].values / 30.0).astype(np.float32)#注意这里训练样本的y/30,以秒为单位，后面还有log化
     raw_data_for_sim = df_fixed[raw_cols].values.astype(np.float32)
 
-    y = np.log(y) #注意y对数化了---------------------------------------------------------------------这里y对数化了
+    #y = np.log(y) #注意y对数化了---------------------------------------------------------------------这里y对数化了
     
     if args.trainvalmode == 1:
         XMiss = X
@@ -1319,11 +1261,14 @@ def main(args):
         
         train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train, raw_train))
         # 保持每个batch形状一致以减少tf.function retracing并降低编译开销
-        train_dataset = train_dataset.cache().batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
-        
+        #train_dataset = train_dataset.cache().batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+        train_dataset = train_dataset.batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+
         val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val, raw_val))
         val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
-        
+
+       
+
         train_model_mlp_cf(
             X_train, y_train, raw_train,
             train_dataset, val_dataset, raw_cols,
@@ -1332,6 +1277,7 @@ def main(args):
 
     elif args.model == 1:
         # 模型1：MLP直接回归
+        args.batch_size = X_train.shape[0]
         train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
         train_dataset = train_dataset.batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
         
@@ -1345,37 +1291,51 @@ def main(args):
         )
     elif args.model == 2:
         # 模型2：MLP+预测丢失slot的multlabel
-        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, ymiss_train))
+        #Xmiss_train, Xmiss_val, ymiss_train, ymiss_val, rawmiss_train, rawmiss_val 
+        args.batch_size =Xmiss_train.shape[0]
+        train_dataset = tf.data.Dataset.from_tensor_slices((Xmiss_train, ymiss_train))
         train_dataset = train_dataset.batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
         
-        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, ymiss_val))
+        val_dataset = tf.data.Dataset.from_tensor_slices((Xmiss_val, ymiss_val))
         val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
         
         train_model_mlp_missonly(
-            X_train, ymiss_train, rawmiss_train,
+            Xmiss_train, ymiss_train, rawmiss_train,
             train_dataset, val_dataset, raw_cols,
             args, dt, raw_val=rawmiss_val
         )
-    elif args.model == 3:
+    elif args.model == 3 or args.model == 4:
         #只预测，不训练，最终实现slot和vanish的预测，slot预测使用训练好的mlp_multlabel模型，vanish预测使用训练好的mlp_cf模型
         
-        if args.fixdata == 1 or args.fixdata == 2:
-            model_path = f"{DIR_TMP_MODEL}/model0_20260813_070524_epoch_250.h5"
+        if args.model == 3:
+            model_path = f"./models/model0_20260822_171349_epoch_300.h5"
             mlpw99cfModel = load_model(model_path)
+            modelVanishPredict = mlpw99cfModel
+            logger.info(f"加载CF模型成功")
+
+
+        if args.model == 4:
+            model_pathT = f"./models/model1_reg_20260823_131426.h5"
+            mlpw99regModel = load_model(model_pathT,custom_objects={'rmse': rmse})
+            modelVanishPredict = mlpw99regModel
+            logger.info(f"加载回归模型成功")
+                       
+
+        if args.fixdata == 1 or args.fixdata == 2:#用原始位置数据不需要识别
             df_fixed = fix_missing_data(df_sampled, args.fixdata)
             logger.info("args.fixdata == 1 or 2, 启用原始数据修补，使用原始数据进行slot位置修补和数据修补")
-            vanish_prediction_log_real_time(mlpw99cfModel,df_fixed,feature_cols,raw_cols, args,logger)
-            
+            if args.model == 3:
+                vanish_prediction_realtime_cf(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger)
+            if args.model == 4:
+                vanish_prediction_realtime_reg(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger)
             
         elif args.fixdata == 3:
             # 1. 首先使用missModel预测哪些slot有丢失车辆
             # 2. 根据预测结果确定需要修补的位置
             # 3. 使用前后车偏移方法进行数据修补
-            model_path = f"{DIR_TMP_MODEL}/model_missvehmultlabel_20260816_222824.h5"
+            model_path = f"./models/model_missvehmultlabel_20260823_133648.h5"
             missModel = load_model(model_path)
 
-            model_path = f"{DIR_TMP_MODEL}/model0_20260813_070524_epoch_250.h5"
-            mlpw99cfModel = load_model(model_path)
             
             X_miss_input = df_sampled[feature_cols].values.astype(np.float32)
             yMissmultlabel = np.stack(df_sampled['removed_vehicles_multlabel'].values).astype(np.float32)
@@ -1423,16 +1383,20 @@ def main(args):
             logger.info(f"模型预测修补完成，处理了 {len(df_fixed)} 个样本")
             
             # 然后使用修补后的数据进行消失时间预测
-            vanish_prediction_log_real_time(mlpw99cfModel,df_fixed,feature_cols,raw_cols, args,logger)
+            if args.model == 3:
+                vanish_prediction_realtime_cf(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger)
+            if args.model == 4:
+                vanish_prediction_realtime_reg(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger)
             
            
 
         else:
             logger.info("args.fixdata 参数不合法 or args.fixdata == 0, 不进行数据修补，直接使用原始数据进行预测") 
             df_fixed = df_sampled  
-            model_path = f"{DIR_TMP_MODEL}/model0_20260813_070524_epoch_250.h5"
-            mlpw99cfModel = load_model(model_path)
-            vanish_prediction_log_real_time(mlpw99cfModel,df_fixed,feature_cols,raw_cols, args,logger)
+            if args.model == 3:
+                vanish_prediction_realtime_cf(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger)
+            if args.model == 4:
+                vanish_prediction_realtime_reg(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger)
             
         
 
@@ -1446,10 +1410,10 @@ def main(args):
 # ===================== 入口执行 =====================
 if __name__ == "__main__":
     # 启动TF性能分析
-    log_dir = "./profiler_records"
-    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-    tf.profiler.experimental.server.start(6009)
-    tf.profiler.experimental.start(log_dir)
+    #log_dir = "./profiler_records"
+    #os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+    #tf.profiler.experimental.server.start(6009)
+    #tf.profiler.experimental.start(log_dir)
 
     # 命令行参数解析
     parser = argparse.ArgumentParser(description="使用Keras和交通仿真进行端到端模型训练")
@@ -1476,5 +1440,5 @@ if __name__ == "__main__":
     main(args)
 
     # 停止性能分析
-    tf.profiler.experimental.stop()
-    tf.profiler.experimental.server.stop()
+    #tf.profiler.experimental.stop()
+    #tf.profiler.experimental.server.stop()
