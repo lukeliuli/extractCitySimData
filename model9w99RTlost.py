@@ -6,7 +6,8 @@ import sys
 import argparse
 import logging
 import gc
-
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'                 # 0=全部 1=关INFO 2=关INFO+WARNING 3=全关(含ERROR)
+os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'  # 规避 protobuf GetPrototy
 # ===================== 第三方库导入 =====================
 import numpy as np
 import pandas as pd
@@ -22,7 +23,7 @@ from tensorflow.keras.models import load_model
 #tf.debugging.enable_check_numerics() 
 # ===================== 本地模块导入 =====================
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from tf_wiedemann99_simulation import tf_wiedemann99_simulation
+from tf_w99v2_simulation import tf_w99v2_simulation
 
 pd.options.mode.chained_assignment = None
 from modelsLostReg import (
@@ -63,7 +64,7 @@ BASE_BOUND_VEHICLE = [
 | CC0 | 停车间距 (Standstill Distance) | 1.0 ~ 2.0 m | (0.5, 2.5) | 基本合理 |
 | CC1 | 车头时距 (Headway Time) | 0.5 ~ 2.0 s | (0.5, 2.5) | 基本合理 |
 | CC2 | 跟车变量 (Following Variation) | 0.1 ~ 0.6 m/s² | (0.3, 1.5) | 上限偏高 |
-| CC3 | 进入跟车阈值 (Threshold for Entering) | 3.0 ~ 8.0 s | (1.0, 3.0) | 范围过小 |
+| CC3 | 
 | CC4 | 负的相对速度阈值 (Neg. "Following" Threshold) | -0.35 ~ 0.0 m/s | (0.5, 1.5) | 完全错误 |
 | CC5 | 正的相对速度阈值 (Pos. "Following" Threshold) | 0.0 ~ 0.35 m/s | (1.6, 3.0) | 完全错误 |
 | CC6 | 速度依赖性 (Speed Dependency) | 10.0 ~ 20.0 | (0.0, 0.5) | 量级错误 |
@@ -71,34 +72,31 @@ BASE_BOUND_VEHICLE = [
 | CC8 | 启动加速度 (Standstill Acceleration) | 1.0 ~ 3.0 m/s² | (1.5, 3.0) | 基本合理 |
 | CC9 | 高速加速度 (Acceleration at 80 km/h) | 0.5 ~ 1.5 m/s² | (0.8, 1.8) | 基本合理 |
 """
-
+BASE_BOUND_VEHICLE = [
+    (1.0, 2.0),   # 0: CC0 (停车间距) [m]
+    (0.5, 2.0),   # 1: CC1 (车头时距) [s]
+    (0.1, 30),   # 2: CC2  SDX=ABX+CC2,安全距离附加值
+    (0.5, 2.0),   # 3: CC3  following状态下的D值,对应的速度差的权重
+    (-0.35, 0.0), # 4: CC4 (负的相对速度阈值) [m/s]CLDV 为负
+    (0.0, 0.35),  # 5: CC5 (正的相对速度阈值) [m/s] OPDV，为正
+    (1,3.0), # 6: CC6   following状态下的D值,对应的速度差的权重
+    (2, 5),   # 7: CC7 (加速度波动) [m/s²]
+    (1.0, 3.0),   # 8: CC8 (启动加速度) [m/s²]
+    (0.5, 1.5)    # 9: CC9 (高速加速度) [m/s²]
+]
 
 BASE_BOUND_VEHICLE = [
     (1.0, 2.0),   # 0: CC0 (停车间距) [m]
     (0.5, 2.0),   # 1: CC1 (车头时距) [s]
-    (0.1, 0.6),   # 2: CC2 (跟车变量) [m/s²]
-    (3.0, 8.0),   # 3: CC3 (进入跟车阈值) [s]
-    (-0.35, 0.0), # 4: CC4 (负的相对速度阈值) [m/s]
-    (0.0, 0.35),  # 5: CC5 (正的相对速度阈值) [m/s]
-    (10.0,20.0), # 6: CC6 (速度依赖性)
-    (0.1, 0.5),   # 7: CC7 (加速度波动) [m/s²]
+    (0.1, 2),   # 2: CC2  SDX=ABX+CC2,安全距离附加值
+    (0.5, 2.0),   # 3: CC3  following状态下的D值,对应的速度差的权重
+    (-1.0, 0.0001), # 4: CC4 (负的相对速度阈值) [m/s]CLDV 为负
+    (0.0001, 1.0),  # 5: CC5 (正的相对速度阈值) [m/s] OPDV，为正
+    (1.0,3.0), # 6: CC6   following状态下的D值,对应的速度差的权重
+    (2.0, 5.0),   # 7: CC7 (加速度波动) [m/s²]
     (1.0, 3.0),   # 8: CC8 (启动加速度) [m/s²]
     (0.5, 1.5)    # 9: CC9 (高速加速度) [m/s²]
 ]
-'''
-BASE_BOUND_VEHICLE = [
-    (1.0, 3.0),   # 0: CC0 (停车间距) [m]
-    (0.5, 3.0),   # 1: CC1 (车头时距) [s]
-    (0.1, 0.6),   # 2: CC2 (跟车变量) [m/s²]
-    (2.0, 9.0),   # 3: CC3 (进入跟车阈值) [s]
-    (-0.55, 0.0), # 4: CC4 (负的相对速度阈值) [m/s]
-    (0.0, 0.55),  # 5: CC5 (正的相对速度阈值) [m/s]
-    (10.0,20.0), # 6: CC6 (速度依赖性)
-    (0.1, 0.5),   # 7: CC7 (加速度波动) [m/s²]
-    (1.0, 3.0),   # 8: CC8 (启动加速度) [m/s²]
-    (0.5, 2.5)    # 9: CC9 (高速加速度) [m/s²]
-]
-'''
 # 保存目录常量
 DIR_TMP_MODEL = "./tmpModes"
 DIR_EVAL_MODEL0 = "./evaluation_results_model0"
@@ -114,7 +112,7 @@ OVERSAMPLE_FACTOR = 2.0  # 丢失车辆样本过采样因子
 # 日志格式
 LOG_FORMAT = '%(asctime)s [%(levelname)s] - %(message)s'
 LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
-
+RUN_START_TIME = ""
 # ===================== TensorFlow 配置 =====================
 # 显存按需分配
 def setup_tf_memory():
@@ -159,8 +157,11 @@ def force_clean_all_memory():
     gc.collect()
     logging.info("内存清理完成")
 
-def setup_logger(log_path, debug=False):
+def setup_logger(args):
     """配置日志记录器，同时输出到文件和控制台"""
+    global RUN_START_TIME 
+    log_path = args.log_path
+    debug = args.debug
     log_level = logging.DEBUG if debug else logging.INFO
     logger = logging.getLogger()
     logger.setLevel(log_level)
@@ -171,7 +172,8 @@ def setup_logger(log_path, debug=False):
 
     # 文件处理器
     timestamp = generate_timestamp()
-    log_path = f"trainlog_{timestamp}.log"
+    RUN_START_TIME = timestamp
+    log_path = f"trainlog_{timestamp}_{args.epochs}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}.log"
     file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
     file_handler.setLevel(log_level)
     file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
@@ -219,7 +221,7 @@ def get_sample_indices(df, num_samples):
     logging.info(f"n_clusters:{n_clusters},kmeans_samples:{len(sampled_indices)}")
     # 补齐
     
-    
+    extra = []
     if len(sampled_indices) < num_samples:
         remaining = list(set(range(len(df))) - set(sampled_indices))
         if remaining:
@@ -236,9 +238,10 @@ def get_sample_indices(df, num_samples):
             sampled_indices.extend(extra)
     
     
-    # 截断到指定数量并去重
-    #sampled_indices = list(dict.fromkeys(sampled_indices))[:num_samples]
+            # 截断到指定数量并去重
+            #sampled_indices = list(dict.fromkeys(sampled_indices))[:num_samples]
     logging.info(f"Random_ReSamples:{len(extra)},samples:{len(sampled_indices)}")
+            
     return sampled_indices
 
 # ===================== 网络模型定义 =====================
@@ -469,11 +472,12 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     #optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
     #optimizer = Adam(learning_rate=args.lr, clipnorm=1.0)
     optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5) #现阶段比较好
-        # 优化器配置：线性warmup + 余弦退火，步数按当前数据量与batch_size自适应
+        
 
 
     #
-
+    '''
+    
     # 优化器配置：余弦退火
     steps_per_epoch = max(1, len(X_train) // args.batch_size)
     total_steps = steps_per_epoch * args.epochs
@@ -507,7 +511,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         t_mul=2.0, m_mul=0.5, alpha=0.0)
 
    # optimizer = SGD(learning_rate=cosine_schedule, momentum=momentum, weight_decay=weight_decay, nesterov=True)
-
+    '''
 
 
 
@@ -541,7 +545,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             #tf.print("debug:前3个样本输出:\n", nn_output[:3])
 
  
-            predicted_times = tf_wiedemann99_simulation(
+            predicted_times = tf_w99v2_simulation(
                     nn_output, raw_batch, param_bounds, num_types,
                     tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
                     dt, args.goffset
@@ -589,7 +593,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     def val_step(x_batch, y_batch, raw_batch):
         """验证步（TF函数装饰，减少重追踪）"""
         nn_output = model(x_batch, training=False)
-        predicted_times = tf_wiedemann99_simulation(
+        predicted_times = tf_w99v2_simulation(
                 nn_output, raw_batch, param_bounds, num_types,
                 tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
                 dt, args.goffset
@@ -686,7 +690,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     # 模型保存
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
-    save_path = f"{DIR_TMP_MODEL}/model0_{timestamp}_epoch_{epoch+1}.h5"
+    save_path = f"{DIR_TMP_MODEL}/model0_{RUN_START_TIME}_epoch_{epoch+1}.h5"
     model.save(save_path)
     logging.info(f"Model 0 saved to: {save_path}")
 
@@ -774,7 +778,7 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
     # 模型保存
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
-    model_path = f"{DIR_TMP_MODEL}/model1_reg_{timestamp}.h5"
+    model_path = f"{DIR_TMP_MODEL}/model1_reg_{timestamp}_{args.epochs}.h5"
     model_vanish_reg.save(model_path)
     logging.info(f"Regression model saved to: {model_path}")
 
@@ -932,6 +936,7 @@ def fix_missing_data(df, fix_type):
                 df_fixed.at[idx,car_speed_col] = speedlist[k]
 
     elif fix_type == 2:
+        df_fixed = df
         for idx in lost_indices:
             removeVehCol = df.at[idx, 'removed_vehicles'] #car_pos_1~5
             removeIntidx =   df.at[idx,'removed_vehicles_intidx'] # 1~5
@@ -1032,7 +1037,7 @@ def vanish_prediction_realtime_cf(modelVanishPredict,df_fixed,feature_cols,raw_c
             tf_idx_red = tf.constant(idx_red, dtype=tf.int32)
             
             # 执行Wiedemann仿真
-            predicted_times = tf_wiedemann99_simulation(
+            predicted_times = tf_w99v2_simulation(
                 nn_output, raw_batch, param_bounds, num_types,
                 tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
                 args.dt, args.goffset
@@ -1084,7 +1089,7 @@ def vanish_prediction_realtime_reg(modelVanishPredict,df_fixed,feature_cols,raw_
 def main(args):
     """主训练流程"""
     # 初始化日志
-    logger = setup_logger(args.log_path, args.debug)
+    logger = setup_logger(args)
     logger.info(f"训练启动，参数配置: {args}")
     
     # ===================== 1. 数据加载与预处理 =====================
@@ -1096,11 +1101,27 @@ def main(args):
         'car_position': 'main_car_position',
         'car_speed': 'main_car_speed'
     }, inplace=True)
+    df1['intersection_pos'] = df1['lane'].map(LANE_POS_MAP)
 
+    ##########
+    #修补一个bug,
+    #1.所有的car_position_0到19，以及main_car_position,开始都认为是起点距离车道线起始线的距离
+    #2.事实上，所有的car_position_0到19，以及main_car_position都是距离车道终点的距离
+    #3.修补后，所有的car_position_0到19，以及main_car_position都是起点距离车道线起始线的距离
+    if 1:
+            logger.info(f"修补一个数据bug:所有的car_position是车辆距离车道线起始线的距离")
+            inter_pos = df1['intersection_pos']
+            df1['main_car_position'] = inter_pos - df1['main_car_position']
 
+            for jj in range(20):
+                col_name = f"car_position_{jj}"
+                pos = df1[col_name]
+                # 只在 pos > 0 时用 inter_pos - pos，其余（-1/NaN）保持原值
+                df1[col_name] = pos.where(pos <= 0, inter_pos - pos)
+    
     # 添加路口位置列,以及其他列
     miss_outdim =5 #根据数据集，移除车辆位置只能是car_position_1到5，对应位置0到4
-    df1['intersection_pos'] = df1['lane'].map(LANE_POS_MAP)
+    #df1['intersection_pos'] = df1['lane'].map(LANE_POS_MAP)
     df1['queued_vehicles']  = df1.apply(count_queued_vehicles, axis=1)
     df1['removed_vehicles_intidx']= -1
     df1['removed_vehicles_multlabel']=  [[0]*miss_outdim for _ in range(len(df1))]
@@ -1133,7 +1154,7 @@ def main(args):
         #    df_missveh2_rn1, df_missveh2_rn2, 
         #    df_missveh2_rn3, df_missveh2_rn4
         #], ignore_index=True)
-        df_all = pd.concat([df1, df_missveh1], ignore_index=True)
+        #df_all = pd.concat([df1, df_missveh1], ignore_index=True)
         df_all = df_missveh1 
     
     
@@ -1145,9 +1166,9 @@ def main(args):
 
     
     # 过滤条件
-    cond_queued = (df_all['queued_vehicles'] > 4) | (df_all['queued_vehicles'] == 0)
+    cond_queued = (df_all['queued_vehicles'] > 5) | (df_all['queued_vehicles'] == 0)
     cond_lost = df_all['lost'] >= 3
-    cond_vanish = df_all['time_to_vanish'] > 35 * 30  # 还原原始时间
+    cond_vanish = df_all['time_to_vanish'] > 30 * 30  # 还原原始时间
     cond_redTime = df_all['time_to_vanish'] < df_all['redLightRemainingTime']
     # 执行过滤
     before_count = len(df_all)
@@ -1221,7 +1242,7 @@ def main(args):
         Xmiss_train, Xmiss_val, ymiss_train, ymiss_val, rawmiss_train, rawmiss_val = train_test_split(
             XMiss, yMissmultlabel, raw_data_for_sim, 
             test_size=args.test_size, 
-            random_state=42
+            random_state=12
         )
 
         logger.info(
