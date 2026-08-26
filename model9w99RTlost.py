@@ -100,7 +100,11 @@ BASE_BOUND_VEHICLE = [
     (0.5, 1.5)    # 9: CC9 (高速加速度) [m/s²]
 ]
 '''
-
+#2026-08-25 16:09:05 [INFO] - Batch 1/1 | Loss: 10.6058 | Time: 264.72s | Remain: 0
+#2026-08-25 16:09:05 [INFO] - Epoch 1 Average Loss: 10.6058
+#2026-08-25 16:09:05 [INFO] - Trainning Results (Real Time) - MSE: 10.6058, RMSE: 3.2567, MAE: 2.5527
+#2026-08-25 16:09:05 [INFO] -===== 验证阶段开始 =====
+#2026-08-25 16:09:36 [INFO] - Validation Results - RMSE: 1.8879, MAE: 1.3736, MSE: 3.5463
 BASE_BOUND_VEHICLE = [
     (1.0, 3.0),   # 0: CC0 (停车间距) [m]
     (0.5, 3.0),   # 1: CC1 (车头时距) [s]
@@ -189,7 +193,7 @@ def setup_logger(args):
     # 文件处理器
     timestamp = generate_timestamp()
     RUN_START_TIME = timestamp
-    log_path = f"trainlog_{timestamp}_{args.epochs}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}.log"
+    log_path = f"./tmpModes/trainlog_{timestamp}_{args.epochs}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}.log"
     file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
     file_handler.setLevel(log_level)
     file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
@@ -627,6 +631,10 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
 
 
     # 开始训练
+    best_val_mae = float('inf')
+    best_epoch = 0
+    best_save_path = ""
+
     total_batches = tf.data.experimental.cardinality(train_dataset).numpy()
     for epoch in range(args.epochs):
         logging.info(f"===== Epoch {epoch + 1}/{args.epochs} =====")
@@ -698,6 +706,18 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 f"MAE: {val_mae:.4f}, MSE: {val_loss_metric.result().numpy():.4f}\n\n"
             )
 
+            # 保存验证集最小MAE的模型
+            if val_mae < best_val_mae:
+                best_val_mae = val_mae
+                best_epoch = epoch + 1
+                best_save_path = (
+                    f"{DIR_TMP_MODEL}/model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
+                    f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.h5"
+                )
+                model.save(best_save_path)
+                logging.info(f"New best model saved (min val MAE): {best_save_path}")
+
+
      
     
 
@@ -706,7 +726,10 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     # 模型保存
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
-    save_path = f"{DIR_TMP_MODEL}/model0_{RUN_START_TIME}_epoch_{epoch+1}.h5"
+    save_path =  (
+                    f"{DIR_TMP_MODEL}/model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
+                    f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.h5"
+                )
     model.save(save_path)
     logging.info(f"Model 0 saved to: {save_path}")
 
@@ -715,16 +738,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
 # ===================== 模型1训练：直接回归预测消失时间 =====================
 # ===================== 模型1训练：直接回归预测消失时间 =====================
 from tensorflow.keras.callbacks import LambdaCallback
-def make_inverse_log_mse_callback(model, val_dataset, log_offset=1e-8):
-    history = []
 
-    def on_epoch_end(epoch, logs=None):
-
-        if epoch%5 != 1:
-            return 
-    cb = LambdaCallback(on_epoch_end=on_epoch_end)
-   
-    return cb
 
 def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset, raw_cols, args, dt, raw_val=None):
     """
@@ -768,7 +782,26 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
         restore_best_weights=True, 
         verbose=1
     )
-    inv_callback = make_inverse_log_mse_callback(model_vanish_reg, val_dataset)
+
+    best_val_mae = [float('inf')]   # 用 list 包裹，便于闭包修改
+
+    def on_epoch_end(epoch,logs=None):
+        if epoch % 5 != 1:
+            return
+        
+        _, val_mae, _ = model_vanish_reg.evaluate(val_dataset, verbose=0)
+        if val_mae < best_val_mae[0]:
+            best_val_mae[0] = val_mae
+            make_dir_safe(DIR_TMP_MODEL)
+            save_path =  (
+                f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_{args.epochs}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
+                f"_mae_{val_mae:.2f}.h5"
+            )
+            model_vanish_reg.save(save_path)
+            logging.info(f"New best reg model saved (min val MAE)_mae_{val_mae:.2f}: {save_path}")
+
+    cb = LambdaCallback(on_epoch_end=on_epoch_end)
+   
 
     # 模型训练
     model_vanish_reg.fit(
@@ -776,7 +809,7 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
         validation_data=val_dataset,
         epochs=args.epochs,
         verbose=1,
-        callbacks=[inv_callback],
+        callbacks=[cb],
         shuffle=True
     )
 
@@ -794,9 +827,12 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
     # 模型保存
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
-    model_path = f"{DIR_TMP_MODEL}/model1_reg_{timestamp}_{args.epochs}.h5"
-    model_vanish_reg.save(model_path)
-    logging.info(f"Regression model saved to: {model_path}")
+    save_path =  (
+                    f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_{args.epochs}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
+                    f"_mae_{val_mae:.2f}.h5"
+                )
+    model_vanish_reg.save(save_path)
+    logging.info(f"Model 1 saved to: {save_path}")
 
     return model_vanish_reg
 

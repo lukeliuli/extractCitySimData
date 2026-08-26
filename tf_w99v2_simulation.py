@@ -67,8 +67,8 @@ def tf_w99v2_simulation(
     # --- 修正版调试代码 END -
     # 偏移量处理 (与FVDM一致)
     offsets = [scene_offset_full[:, i] for i in range(10)]
-    offset_scales = [2.0, 8.0, 2.0, 5.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
-    offset_shifts = [-1.0, 0.0, -1.0, 0.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
+    offset_scales = [2.0, 8.0, 2.0, 8.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
+    offset_shifts = [0.0, 0.0, -1.0, 0.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0]
     processed_offsets = []
     for offset, scale, shift in zip(offsets, offset_scales, offset_shifts):
         offset = (shift + offset * 2.0) * scale if shift != 0 else offset * scale
