@@ -1381,14 +1381,14 @@ def main(args):
         #只预测，不训练，最终实现slot和vanish的预测，slot预测使用训练好的mlp_multlabel模型，vanish预测使用训练好的mlp_cf模型
         
         if args.model == 3:
-            model_path = f"./models/model0_20260822_171349_epoch_300.h5"
+            model_path = f"./tmpModes/model0_20260826_124623_0_0_1100_0_epoch_31_mae_1.1801.h5"
             mlpw99cfModel = load_model(model_path)
             modelVanishPredict = mlpw99cfModel
             logger.info(f"加载CF模型成功")
 
 
         if args.model == 4:
-            model_pathT = f"./models/model1_reg_20260823_131426.h5"
+            model_pathT = f"./tmpModes/model1_reg_20260826_130038_1000_0_1172_0_mae_1.30.h5"
             mlpw99regModel = load_model(model_pathT,custom_objects={'rmse': rmse})
             modelVanishPredict = mlpw99regModel
             logger.info(f"加载回归模型成功")
