@@ -1443,7 +1443,7 @@ def main(args):
                        
                         speedlist = [df_fixed.at[idx, f'car_speed_{j}'] for j in range(0,20)]
                         poslist = [df_fixed.at[idx, f'car_position_{j}'] for j in range(0,20)]
-                        poslist.insert(slot_i+1, poslist[slot_i+1]-5) # slot_i如果为0，就插到index为1的位置，也就是slot_i+1.
+                        poslist.insert(slot_i+1, poslist[slot_i+1]-8) # slot_i如果为0，就插到index为1的位置，也就是slot_i+1.
                         speedlist.insert(slot_i+1, speedlist[slot_i+1])# speedlist长度会增加到21吗
                         for k in range(0,20):
                             car_pos_col = f'car_position_{k}'
