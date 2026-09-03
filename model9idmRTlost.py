@@ -23,7 +23,7 @@ from tensorflow.keras.models import load_model
 #tf.debugging.enable_check_numerics() 
 # ===================== 本地模块导入 =====================
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from tf_w99v2_simulation import tf_w99v2_simulation
+from tf_idm_simulation import tf_idm_simulation
 
 pd.options.mode.chained_assignment = None
 from modelsLostReg import (
@@ -72,17 +72,14 @@ BASE_BOUND_VEHICLE = [
 | CC8 | 启动加速度 (Standstill Acceleration) | 1.0 ~ 3.0 m/s² | (1.5, 3.0) | 基本合理 |
 | CC9 | 高速加速度 (Acceleration at 80 km/h) | 0.5 ~ 1.5 m/s² | (0.8, 1.8) | 基本合理 |
 """
+# IDM参数边界（激活）：v0, T, s0, a, b, rtime
 BASE_BOUND_VEHICLE = [
-    (1.0, 2.0),   # 0: CC0 (停车间距) [m]
-    (0.5, 2.0),   # 1: CC1 (车头时距) [s]
-    (0.1, 30),   # 2: CC2  SDX=ABX+CC2,安全距离附加值
-    (0.5, 2.0),   # 3: CC3  following状态下的D值,对应的速度差的权重
-    (-0.35, 0.0), # 4: CC4 (负的相对速度阈值) [m/s]CLDV 为负
-    (0.0, 0.35),  # 5: CC5 (正的相对速度阈值) [m/s] OPDV，为正
-    (1,3.0), # 6: CC6   following状态下的D值,对应的速度差的权重
-    (2, 5),   # 7: CC7 (加速度波动) [m/s²]
-    (1.0, 3.0),   # 8: CC8 (启动加速度) [m/s²]
-    (0.5, 1.5)    # 9: CC9 (高速加速度) [m/s²]
+    (30/3.6, 75/3.6),  # v0 期望速度 [m/s]
+    (0.1, 2.0),        # T 安全车头时距 [s]
+    (0.2, 1.0),        # s0 停车间距 [m]
+    (1.0, 6.0),        # a 最大加速度 [m/s²]
+    (1.0, 9.0),        # b 舒适减速度 [m/s²]
+    (0.01, 1.0)        # rtime 反应时间 [s]
 ]
 
 '''
@@ -105,17 +102,14 @@ BASE_BOUND_VEHICLE = [
 #2026-08-25 16:09:05 [INFO] - Trainning Results (Real Time) - MSE: 10.6058, RMSE: 3.2567, MAE: 2.5527
 #2026-08-25 16:09:05 [INFO] -===== 验证阶段开始 =====
 #2026-08-25 16:09:36 [INFO] - Validation Results - RMSE: 1.8879, MAE: 1.3736, MSE: 3.5463
+# IDM参数边界（最终激活）：v0, T, s0, a, b, rtime
 BASE_BOUND_VEHICLE = [
-    (1.0, 3.0),   # 0: CC0 (停车间距) [m]
-    (0.5, 3.0),   # 1: CC1 (车头时距) [s]
-    (0.1, 20),   # 2: CC2  SDX=ABX+CC2,安全距离附加值
-    (0.5, 9.0),   # 3: CC3  following状态下的D值,对应的速度差的权重
-    (-5.0, 0.0001), # 4: CC4 (负的相对速度阈值) [m/s]CLDV 为负
-    (0.0001, 5.0),  # 5: CC5 (正的相对速度阈值) [m/s] OPDV，为正
-    (1.0,9.0), # 6: CC6   following状态下的D值,对应的速度差的权重
-    (1.0, 5.0),   # 7: CC7 (加速度波动) [m/s²]
-    (1.0, 3.0),   # 8: CC8 (启动加速度) [m/s²]
-    (0.5, 1.5)    # 9: CC9 (高速加速度) [m/s²]
+    (30/3.6, 75/3.6),  # v0 期望速度 [m/s]
+    (0.1, 2.0),        # T 安全车头时距 [s]
+    (0.2, 1.0),        # s0 停车间距 [m]
+    (1.0, 6.0),        # a 最大加速度 [m/s²]
+    (1.0, 9.0),        # b 舒适减速度 [m/s²]
+    (0.01, 1.0)        # rtime 反应时间 [s]
 ]
 # 保存目录常量
 DIR_TMP_MODEL = "./tmpModes"
@@ -193,7 +187,7 @@ def setup_logger(args):
     # 文件处理器
     timestamp = generate_timestamp()
     RUN_START_TIME = timestamp
-    log_path = f"./tmpModes/trainlog_{timestamp}_{args.epochs}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}.log"
+    log_path = f"./tmpModes/idm_trainlog_{timestamp}_{args.epochs}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}.log"
     file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
     file_handler.setLevel(log_level)
     file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
@@ -287,9 +281,8 @@ def compute_param_stats(arr, name, bin_num=50):
         prop_at_min=prop_min, prop_at_max=prop_max,
     )
 def report_val_params_stats(real_params, scene_offset, tag=""):
-    """统计 CC0-CC9（聚合 all_types + 按车型 type_0..N-1）及全局 2 个偏移，
-    输出表格并导出盒状图长表 CSV"""
-    param_names = ["CC0", "CC1", "CC2", "CC3", "CC4", "CC5", "CC6", "CC7", "CC8", "CC9"]
+    """ 输出表格并导出盒状图长表 CSV"""
+    param_names = ["v0", "T", "s0", "a", "b", "rtime"]
     num_types = real_params.shape[1]
     rows, long_records = [], []
 
@@ -300,11 +293,11 @@ def report_val_params_stats(real_params, scene_offset, tag=""):
         for v in vals:
             long_records.append((pname, group, float(v)))
 
-    # 1) CC0-CC9：所有车型聚合
+    # 1)所有车型聚合
     for i, pname in enumerate(param_names):
         _add_stats(real_params[..., i].ravel(), pname, "all_types")
 
-    # 2) CC0-CC9：按车型分组
+    # 2)按车型分组
     for t in range(num_types):
         gname = f"type_{t}"
         for i, pname in enumerate(param_names):
@@ -312,8 +305,8 @@ def report_val_params_stats(real_params, scene_offset, tag=""):
 
     # 3) 全局两个偏移
     if scene_offset is not None:
-        red_time = scene_offset[:, 0] * 2.0   # redlighttime_offset
-        red_pos  = scene_offset[:, 3] * 8.0   # redlightpos_offset
+        red_time = (scene_offset[:, 0] * 2.0 - 1.0) * 2.0   # redlighttime_offset
+        red_pos  = scene_offset[:, 3] * 2.0                  # redlightpos_offset
         _add_stats(red_time, "redlight_time_offset", "global")
         _add_stats(red_pos,  "redlight_pos_offset",  "global")
 
@@ -330,55 +323,15 @@ def report_val_params_stats(real_params, scene_offset, tag=""):
 
     make_dir_safe(DIR_EVAL_MODEL0)
     stamp = generate_timestamp()
-    df.to_csv(f"{DIR_EVAL_MODEL0}/val_param_stats_{stamp}.csv", index=False)
-    long_df.to_csv(f"{DIR_EVAL_MODEL0}/val_param_boxplot_{stamp}.csv", index=False)
-    logging.info(f"参数统计已导出: {DIR_EVAL_MODEL0}/val_param_stats_{stamp}.csv")
-    logging.info(f"盒状图数据已导出: {DIR_EVAL_MODEL0}/val_param_boxplot_{stamp}.csv")
+    df.to_csv(f"{DIR_EVAL_MODEL0}/idm_val_param_stats_{stamp}.csv", index=False)
+    long_df.to_csv(f"{DIR_EVAL_MODEL0}/idm_val_param_boxplot_{stamp}.csv", index=False)
+    logging.info(f"参数统计已导出: {DIR_EVAL_MODEL0}/idm_val_param_stats_{stamp}.csv")
+    logging.info(f"盒状图数据已导出: {DIR_EVAL_MODEL0}/idm_val_param_boxplot_{stamp}.csv")
     return df, long_df
 
 def generate_timestamp():
     """生成统一时间戳，减少系统调用"""
     return time.strftime("%Y%m%d_%H%M%S", time.localtime())
-
-def plot_epoch_val_mae(epochs, val_maes, save_dir, train_epochs=None, train_maes=None, tag=""):
-    """绘制训练过程曲线（X=epoch, Y=MAE），并导出 CSV 数据"""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    make_dir_safe(save_dir)
-    epochs = np.asarray(epochs, dtype=np.float64)
-    val_maes = np.asarray(val_maes, dtype=np.float64)
-    stamp = generate_timestamp()
-    suffix = f"_{tag}" if tag else ""
-
-    df = pd.DataFrame({"epoch": epochs, "val_mae": val_maes})
-    if train_epochs is not None and len(train_epochs) > 0:
-        dft = pd.DataFrame({
-            "epoch": np.asarray(train_epochs, dtype=np.float64),
-            "train_mae": np.asarray(train_maes, dtype=np.float64),
-        })
-        df = df.merge(dft, on="epoch", how="outer").sort_values("epoch")
-
-    csv_path = f"{save_dir}/epoch_mae{suffix}_{stamp}.csv"
-    df.to_csv(csv_path, index=False)
-    logging.info(f"训练过程曲线数据已导出: {csv_path}")
-
-    fig, ax = plt.subplots(figsize=(9, 5))
-    if train_epochs is not None and len(train_epochs) > 0:
-        ax.plot(train_epochs, train_maes, label="train_mae", linewidth=1.2, alpha=0.7)
-    ax.plot(epochs, val_maes, "o-", label="val_mae", linewidth=1.6, markersize=3.5)
-    ax.set_xlabel("epoch")
-    ax.set_ylabel("MAE")
-    ax.set_title("MAE vs epoch")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-
-    png_path = f"{save_dir}/epoch_mae{suffix}_{stamp}.png"
-    fig.savefig(png_path, dpi=150)
-    plt.close(fig)
-    logging.info(f"训练过程曲线已保存: {png_path}")
 
 def get_sample_indices(df, num_samples):
     """封装样本索引生成逻辑，避免重复计算"""
@@ -640,7 +593,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     """
     num_types = args.num_types
     num_types2 = num_types + 1
-    output_dim = num_types2 * 10  # W99需要10个参数
+    output_dim = num_types2 * 6  # IDM需要6个参数
 
     # 构建模型
     model = build_simple_resnet2(X_train.shape[1], output_dim, args.unit, args.layNum)
@@ -726,18 +679,11 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             #tf.print("debug:nn_output 包含 NaN:", has_nan, " | 包含 Inf:", has_inf)
 
             # 2. 打印形状、均值、方差和前3个样本的输出，避免刷屏
-            #tf.print("debug:nn_output 形状:", tf.shape(nn_output), " | 均值scaled0    = tf.reshape(nn_output, [tf.shape(nn_output)[0], num_types + 1, 10])
-            scaled0    = tf.reshape(nn_output, [tf.shape(nn_output)[0], num_types + 1, 10])
-            scaled_veh = scaled0[:, :-1, :]                        # [batch, num_types, 10] 40个车参数
-            scene_off  = scaled0[:, -1, :]                         # [batch, 10]
-            scene_2    = tf.stack([scene_off[:, 0], scene_off[:, 3]], axis=1)  # [batch, 2] 全局2参数
+            #tf.print("debug:nn_output 形状:", tf.shape(nn_output), " | 均值:", tf.reduce_mean(nn_output)," | 方差:", tf.math.reduce_variance(nn_output))
+            #tf.print("debug:前3个样本输出:\n", nn_output[:3])
 
-            reg_veh = tf.reduce_mean(tf.math.reduce_variance(scaled_veh, axis=0))  # 车参数方差
-            reg_glo = tf.reduce_mean(tf.math.reduce_variance(scene_2,  axis=0))    # 全局2参数方差:", tf.reduce_mean(nn_output)," | 方差:", tf.math.reduce_variance(nn_output))
-                        #tf.print("debug:前3个样本输出:\n", nn_output[:3])
-    
  
-            predicted_times = tf_w99v2_simulation(
+            predicted_times = tf_idm_simulation(
                     nn_output, raw_batch, param_bounds, num_types,
                     tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
                     dt, args.goffset
@@ -760,10 +706,9 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             predicted_times = tf.reshape(predicted_times, [batch_size])
             y_batch = tf.reshape(y_batch, [batch_size])
 
-            
-            #loss = tf.reduce_mean(tf.square(predicted_times - y_batch))
+
+            loss = tf.reduce_mean(tf.square(predicted_times - y_batch))
             #loss = tf.reduce_mean(tf.keras.losses.huber(y_batch, predicted_times, delta=1.0))
-            loss = tf.reduce_mean(tf.square(predicted_times - y_batch)) + args.lambda_veh * reg_veh+ args.lambda_glo * reg_glo
 
             #tf.print("DEBUG Pred Mean:", tf.reduce_mean(predicted_times), 
             #    "Pred Var:", tf.math.reduce_variance(predicted_times),
@@ -786,7 +731,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     def val_step(x_batch, y_batch, raw_batch):
         """验证步（TF函数装饰，减少重追踪）"""
         nn_output = model(x_batch, training=False)
-        predicted_times = tf_w99v2_simulation(
+        predicted_times = tf_idm_simulation(
                 nn_output, raw_batch, param_bounds, num_types,
                 tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
                 dt, args.goffset
@@ -807,10 +752,6 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     best_val_mae = float('inf')
     best_epoch = 0
     best_save_path = ""
-
-    # 记录训练过程指标（X=epoch）
-    hist_train_epochs, hist_train_mae = [], []
-    hist_val_epochs,   hist_val_mae   = [], []
 
     total_batches = tf.data.experimental.cardinality(train_dataset).numpy()
     for epoch in range(args.epochs):
@@ -856,9 +797,6 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
         train_rmse = np.sqrt(train_mse)
         train_mae = np.mean(np.abs(errs))
 
-        hist_train_epochs.append(epoch + 1)
-        hist_train_mae.append(train_mae)
-
         logging.info(
             f"Trainning Results (Real Time) - MSE: {train_mse:.4f}, "
             f"RMSE: {train_rmse:.4f}, MAE: {train_mae:.4f}")
@@ -879,7 +817,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 val_loss_metric.update_state(np.mean(np.square(enp)))
                 
                 # ---- 参数反归一化采集（与仿真内部完全一致）----
-                s = np.clip(nn_out.numpy(), 0.01, 0.99).reshape(-1, num_types + 1, 10)
+                s = np.clip(nn_out.numpy(), 0.01, 0.99).reshape(-1, num_types + 1, 6)
                 low = np.asarray(param_bounds, dtype=np.float32)[..., 0]
                 high = np.asarray(param_bounds, dtype=np.float32)[..., 1]
                 rp = low + s[:, :-1, :] * (high - low)
@@ -893,9 +831,6 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             val_rmse = np.sqrt(np.mean(np.square(val_errs)))
             val_mae = np.mean(np.abs(val_errs))
 
-            hist_val_epochs.append(epoch + 1)
-            hist_val_mae.append(val_mae)
-
             logging.info(
                 f"Validation Results - RMSE: {val_rmse:.4f}, "
                 f"MAE: {val_mae:.4f}, MSE: {val_loss_metric.result().numpy():.4f}\n\n"
@@ -906,7 +841,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 best_val_mae = val_mae
                 best_epoch = epoch + 1
                 best_save_path = (
-                    f"{DIR_TMP_MODEL}/model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
+                    f"{DIR_TMP_MODEL}/idm_model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
                     f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.h5"
                 )
                 model.save(best_save_path)
@@ -925,18 +860,11 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
     save_path =  (
-                    f"{DIR_TMP_MODEL}/model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
+                    f"{DIR_TMP_MODEL}/idm_model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
                     f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.h5"
                 )
     model.save(save_path)
     logging.info(f"Model 0 saved to: {save_path}")
-
-    # 绘制训练过程曲线（X=epoch, Y=MAE）
-    plot_epoch_val_mae(
-        hist_val_epochs, hist_val_mae, DIR_EVAL_MODEL0,
-        train_epochs=hist_train_epochs, train_maes=hist_train_mae,
-        tag=f"model{args.model}",
-    )
 
     return model
 
@@ -1009,7 +937,7 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
    
 
     # 模型训练
-    history = model_vanish_reg.fit(
+    model_vanish_reg.fit(
         train_dataset,
         validation_data=val_dataset,
         epochs=args.epochs,
@@ -1017,18 +945,6 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
         callbacks=[cb],
         shuffle=True
     )
-
-    # 训练过程曲线（X=epoch, Y=MAE）
-    hist_val_mae = history.history.get("val_mae", [])
-    hist_train_mae = history.history.get("mae", [])
-    if len(hist_val_mae) > 0:
-        val_epochs = np.arange(1, len(hist_val_mae) + 1)
-        train_epochs = np.arange(1, len(hist_train_mae) + 1)
-        plot_epoch_val_mae(
-            val_epochs, hist_val_mae, DIR_EVAL_MODEL0,
-            train_epochs=train_epochs, train_maes=hist_train_mae,
-            tag=f"model{args.model}_reg",
-        )
 
     # 评估指标
     train_loss, train_mae, train_rmse = model_vanish_reg.evaluate(train_dataset, verbose=0)
@@ -1187,22 +1103,16 @@ def fix_missing_data(df, fix_type):
     # 获取丢失样本索引
     lost_indices = df.index[df['lost'] > 0].tolist()
     logging.info(f"开始修补数据，共 {len(lost_indices)} 个缺失样本，修补类型: {fix_type}")
-
-    if fix_type == 1 or fix_type ==2:
-        print("不想实现了 fix_type == 1 or 2")
-        lost_count = len(df.index[df['lost'] > 0])
-        logging.info(f"不修补数据，采样样本数: {len(df)}, 缺失样本数: {lost_count}")
-        return df
-
+   
     # 方法1：直接前车-5
     if fix_type == 1:
         df_fixed = df
         for idx in lost_indices:
             removeVehCol = df.at[idx, 'removed_vehicles'] #car_pos_1~5
-            removeIntidx =   df.at[idx,'removed_vehicles_intidx'][0] # 1~5
+            removeIntidx =   df.at[idx,'removed_vehicles_intidx'] # 1~5
             speedlist = [df_fixed.at[idx, f'car_speed_{j}'] for j in range(0,20)]
             poslist = [df_fixed.at[idx, f'car_position_{j}'] for j in range(0,20)]
-            poslist.insert(removeIntidx, poslist[removeIntidx]+8) # 例如插入原来的removeIntidx = 1的位置，那样原来car_position_1 变为2
+            poslist.insert(removeIntidx, poslist[removeIntidx]-5) # 例如插入原来的removeIntidx = 1的位置，那样原来car_position_1 变为2
             speedlist.insert(removeIntidx, speedlist[removeIntidx])# speedlist长度会增加到21吗
             for k in range(0,20):
                 car_pos_col = f'car_position_{k}'
@@ -1233,8 +1143,39 @@ def fix_missing_data(df, fix_type):
 
 
 def compute_gap_and_dv(row):
-    #数据中，已经假定car_position_0,位置最大，car_position_19位置最小。随着index增大，位置增大。最大只有20辆车，car_position_0假定最接近该车道消失线
-    #print("不想实现了")
+    #数据中，已经假定car_position_0,位置最小，car_position_19位置最大。随着index增大，位置增大。最大只有20辆车，car_position_19假定最接近该车道消失线
+    for i in range(19):
+        pos_col = f"car_position_{i}"
+        speed_col = f"car_speed_{i}"
+        front_pos_col = f"car_position_{i+1}"
+        front_speed_col = f"car_speed_{i+1}"
+        
+        pos = row[pos_col]
+        front_pos = row[front_pos_col]
+        if pos == -1:
+            gap_col = f"car_gap_{i}"
+            dv_col = f"car_dv_{i}"
+            row[gap_col] = -1
+            row[dv_col] = -1
+
+        elif front_pos == -1:
+            gap_col = f"car_gap_{i}"
+            dv_col = f"car_dv_{i}"
+            row[gap_col] = row['intersection_pos'] - pos
+            row[dv_col] = row[speed_col]
+
+        else:
+           gap_col = f"car_gap_{i}"
+           dv_col = f"car_dv_{i}"
+           row[gap_col] = front_pos - pos
+           row[dv_col] =  row[front_speed_col] - row[speed_col]
+
+    if row["car_position_19"] == -1:      
+        row["car_gap_19"]   = -1
+        row["car_dv_19"]   =  -1
+    else:
+        row["car_gap_19"]   = row['intersection_pos'] - row["car_position_19"]
+        row["car_dv_19"]   =  row["car_speed_19"]
     return row
 
 
@@ -1282,7 +1223,7 @@ def vanish_prediction_realtime_cf(modelVanishPredict,df_fixed,feature_cols,raw_c
             tf_idx_red = tf.constant(idx_red, dtype=tf.int32)
             
             # 执行Wiedemann仿真
-            predicted_times = tf_w99v2_simulation(
+            predicted_times = tf_idm_simulation(
                 nn_output, raw_batch, param_bounds, num_types,
                 tf_pos_idx, tf_speed_idx, tf_idx_main, tf_idx_inter, tf_idx_red,
                 args.dt, args.goffset
@@ -1315,7 +1256,7 @@ def vanish_prediction_realtime_cf(modelVanishPredict,df_fixed,feature_cols,raw_c
         high = np.asarray(param_bounds, dtype=np.float32)[..., 1]
 
         all_scaled = np.concatenate(vanish_scaled, axis=0)         # (N, num_types+1, 10)
-        scaled0 = all_scaled.reshape(-1, num_types + 1, 10)
+        scaled0 = all_scaled.reshape(-1, num_types + 1, 6)
         scaled_params = scaled0[:, :-1, :]      # (N, num_types, 10) -> CC0~CC9
         scene_offset   = scaled0[:, -1, :]      # (N, 10) -> 全局偏移
 
@@ -1325,7 +1266,7 @@ def vanish_prediction_realtime_cf(modelVanishPredict,df_fixed,feature_cols,raw_c
             real_params, scene_offset, tag="realtime_cf"
         )
         plot_param_boxplots(long_df, DIR_EVAL_MODEL0, tag="realtime_cf")
-
+        
 
 def vanish_prediction_realtime_reg(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger):
         X_vanish = df_fixed[feature_cols].values.astype(np.float32)
@@ -1369,11 +1310,11 @@ def main(args):
 
     ##########
     #修补一个bug,
-    #1.所有的car_position_0到19，以及main_car_position,开始都认为是车辆距离车道线起始线的距离
+    #1.所有的car_position_0到19，以及main_car_position,开始都认为是起点距离车道线起始线的距离
     #2.事实上，所有的car_position_0到19，以及main_car_position都是距离车道终点的距离
-    #3.修补后，所有的car_position_0到19，以及main_car_position都是车辆距离车道线起始线的距离
+    #3.修补后，所有的car_position_0到19，以及main_car_position都是起点距离车道线起始线的距离
     if 1:
-            logger.info(f"修补一个数据bug:所有的car_position是车辆距离车道线起始线的距离,car_pos_0 位置最大，距离车道终点线最近")
+            logger.info(f"修补一个数据bug:所有的car_position是车辆距离车道线起始线的距离")
             inter_pos = df1['intersection_pos']
             df1['main_car_position'] = inter_pos - df1['main_car_position']
 
@@ -1382,15 +1323,13 @@ def main(args):
                 pos = df1[col_name]
                 # 只在 pos > 0 时用 inter_pos - pos，其余（-1/NaN）保持原值
                 df1[col_name] = pos.where(pos <= 0, inter_pos - pos)
-                #print(df1[col_name][0])
-    
     
     # 添加路口位置列,以及其他列
     miss_outdim =5 #根据数据集，移除车辆位置只能是car_position_1到5，对应位置0到4
     #df1['intersection_pos'] = df1['lane'].map(LANE_POS_MAP)
     df1['queued_vehicles']  = df1.apply(count_queued_vehicles, axis=1)
     df1['removed_vehicles_intidx']= [[] for _ in range(len(df1))]
-    df1['removed_vehicles_multlabel']=  [[] for _ in range(len(df1))]
+    df1['removed_vehicles_multlabel']=  [([0]*miss_outdim) for _ in range(len(df1))]
     for i in range(20):
         df1[f"car_gap_{i}"] = -1.0
         df1[f"car_dv_{i}"] = -1.0
@@ -1413,8 +1352,7 @@ def main(args):
         # 生成不同数量丢失车辆的样本
         #print(df1.columns)
         df_missveh1 =  genSamplesRemovingVehicleWithOneSlot(df1)
-        df_missveh2 =  genSamplesRemovingVehicleWithOneSlot(df_missveh1 )
-        df_missveh3 =  genSamplesRemovingVehicleWithOneSlot(df_missveh2 )
+       
        
         # 合并缺失样本
         #df_step2_missveh2 = pd.concat([
@@ -1494,6 +1432,13 @@ def main(args):
     y = (df_fixed['time_to_vanish'].values / 30.0).astype(np.float32)#注意这里训练样本的y/30,以秒为单位，后面还有log化
     raw_data_for_sim = df_fixed[raw_cols].values.astype(np.float32)
 
+    X_train, X_val, y_train, y_val, raw_train, raw_val = train_test_split(
+        X, y, raw_data_for_sim, 
+        test_size=args.test_size, 
+        random_state=42
+    )
+    
+
     #y = np.log(y) #注意y对数化了---------------------------------------------------------------------这里y对数化了
     
     if args.trainvalmode == 1:
@@ -1547,20 +1492,17 @@ def main(args):
     if args.model == 0:
         # 模型0：MLP+CF端到端训练
         
-        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train, raw_train))
-        # 保持每个batch形状一致以减少tf.function retracing并降低编译开销
-        #train_dataset = train_dataset.cache().batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+        args.batch_size = X_train.shape[0]
+        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
         train_dataset = train_dataset.batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
-
-        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val, raw_val))
+        
+        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
         val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
-
-       
-
-        train_model_mlp_cf(
+        
+        train_model_mlp_reg(
             X_train, y_train, raw_train,
             train_dataset, val_dataset, raw_cols,
-            args, dt
+            args, dt, raw_val=raw_val
         )
 
     elif args.model == 1:
@@ -1596,9 +1538,9 @@ def main(args):
         #只预测，不训练，最终实现slot和vanish的预测，slot预测使用训练好的mlp_multlabel模型，vanish预测使用训练好的mlp_cf模型
         
         if args.model == 3:
-            model_path = f"./tmpModes/model0_20260826_124623_0_0_1100_0_epoch_31_mae_1.1801.h5"
-            mlpw99cfModel = load_model(model_path)
-            modelVanishPredict = mlpw99cfModel
+            model_path = f"./tmpModes/idmmodel0_20260831_102055_0_0_300_0_epoch_11_mae_0.9731.h5"
+            mlpcfModel = load_model(model_path)
+            modelVanishPredict = mlpcfModel
             logger.info(f"加载CF模型成功")
 
 
@@ -1653,12 +1595,12 @@ def main(args):
                 #注意这里根据模型和数据，slot_i 智能是0,1,2,3,4,5其中之一.而且只会有一个为1. 
                 for slot_i in range(pred_labels.shape[0]):
                     if pred_labels[slot_i] == 1:
-                        #slot 0,1,2,3,4 对应car_position0前面,
-                        # 前提car_position0~19已经按照从大到小排列                  
+                        #slot 0,1,2,3,4 对应car_position0前之间
+                        # 前提car_position0~19已经按照从小到大排列                         
                        
                         speedlist = [df_fixed.at[idx, f'car_speed_{j}'] for j in range(0,20)]
                         poslist = [df_fixed.at[idx, f'car_position_{j}'] for j in range(0,20)]
-                        poslist.insert(slot_i, poslist[slot_i]+8) # slot_i如果为0，就插到index为0的位置+8.
+                        poslist.insert(slot_i, poslist[slot_i]+8) # slot_i如果为0，就插到index为1的位置，也就是slot_i+1.
                         speedlist.insert(slot_i, speedlist[slot_i])# speedlist长度会增加到21吗
                         for k in range(0,20):
                             car_pos_col = f'car_position_{k}'
@@ -1672,7 +1614,7 @@ def main(args):
             
             # 然后使用修补后的数据进行消失时间预测
             if args.model == 3:
-                vanish_prediction_realtime_cf(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger)
+                vanish_prediction_realtime_cf(mlpcfModel,df_fixed,feature_cols,raw_cols, args,logger)
             if args.model == 4:
                 vanish_prediction_realtime_reg(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger)
             
@@ -1682,7 +1624,7 @@ def main(args):
             logger.info("args.fixdata 参数不合法 or args.fixdata == 0, 不进行数据修补，直接使用原始数据进行预测") 
             df_fixed = df_sampled  
             if args.model == 3:
-                vanish_prediction_realtime_cf(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger)
+                vanish_prediction_realtime_cf(mlpcfModel,df_fixed,feature_cols,raw_cols, args,logger)
             if args.model == 4:
                 vanish_prediction_realtime_reg(modelVanishPredict,df_fixed,feature_cols,raw_cols, args,logger)
             
@@ -1722,9 +1664,7 @@ if __name__ == "__main__":
     parser.add_argument('--fixdata', type=int, default=0, help='0(不修补),1(原始数据补),2(前后车偏移补),3 模型预测修补，前后车偏移补')
     parser.add_argument('--goffset', type=int, default=1, help='仿真全局偏移参数开关')
     parser.add_argument('--trainvalmode', type=int, default=0, help='0(无丢失,只有vanish),1(有丢失,有misss数据)')
-    
-    parser.add_argument('--lambda_veh', type=float, default=0.000, help='车参数方差正则强度')
-    parser.add_argument('--lambda_glo', type=float, default=0.000, help='全局2参数方差正则强度')
+   
 
     args = parser.parse_args()
     main(args)

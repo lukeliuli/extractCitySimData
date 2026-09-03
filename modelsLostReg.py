@@ -394,7 +394,7 @@ def count_queued_vehicles(row):
                     queued_count += 1
             return queued_count
 
-def remove_onevehicle_slot(row, removeQueueVehIndex):
+def remove_onevehicle_slot(row, removeQueueVehIndex):#removeVehIndex == 0~nqueue-1 ,如果为0,安装数据排列（car_pos_0POS最大，距离终点最近），就是距离主车最远的车
     outputDim = 5 #数据集中实际上最多只有6辆车排队，移除车辆只能是car_position_1~5
     queued_Vehicles = row['queued_vehicles']
     if removeQueueVehIndex >= queued_Vehicles or queued_Vehicles == 0 :
@@ -404,70 +404,47 @@ def remove_onevehicle_slot(row, removeQueueVehIndex):
     main_pos = row['main_car_position']
     removeVehCol = None
     queued_index = -1  # 移到循环外
+    removeIntidx = -1
+    for i in range(20):
+           
+           if row[f'car_position_{i}']>main_pos:
+               queued_index = queued_index+1
+           if removeQueueVehIndex ==  queued_index:#removeVehIndex == 0~nqueue-1 ,如果为0,安装数据排列（car_pos_0POS最大，距离终点最近），就是距离主车最远的车
+               removeIntidx = i
+               removeVehCol = f'car_pos_{i}'
+                 
+            
+
+    speedlist = [row[f'car_speed_{j}'] for j in range(0,20)]
+    poslist = [row[f'car_position_{j}'] for j in range(0,20)]
+    poslist.pop(removeIntidx) # 
+    speedlist.pop(removeIntidx)# 
+    poslist.append(-1)
+    speedlist.append(-1)
+    for k in range(0,20):
+        car_pos_col = f'car_position_{k}'
+        car_speed_col = f'car_speed_{k}'
+        row[car_pos_col] = poslist[k]
+        row[car_speed_col] = speedlist[k]
    
 
-    for i in range(20):
-        pos_col = f"car_position_{i}"
-        speed_col = f"car_speed_{i}"
-        pos = row[pos_col]
+   
+    row['lost'] = row['lost']+1
+    row['removed_vehicles'].append(removeVehCol)
+    row['removed_vehicles_intidx'].append(removeIntidx)
 
-        if pos != -1 and pos > main_pos:
-            queued_index += 1
-            if removeQueueVehIndex == queued_index:
-                row[pos_col] = -1
-                row[speed_col] = -1
-                removeVehCol = pos_col
-                row['lost'] = 1
-                
 
-            elif removeQueueVehIndex < queued_index:
-                if i > 0:
-                    prev_pos_col = f"car_position_{i-1}"
-                    prev_speed_col = f"car_speed_{i-1}"
-                    row[prev_pos_col] = row[pos_col]
-                    row[prev_speed_col] = row[speed_col]  # 修正速度赋值
-                    row[pos_col] = -1
-                    row[speed_col] = -1
+    mullab = [0] * outputDim
+    removeIntidx = min(removeIntidx, outputDim - 1)  # 确保索引不超过最大值
+    mullab[removeIntidx] = 1
+    
+    row['removed_vehicles_multlabel'] = mullab#.append((removeIntidx))#数据集中实际上最多只有6辆车排队，移除车辆只能是car_position_1~5，对应位置0~4
 
-    row['removed_vehicles'] = removeVehCol
-    row['removed_vehicles_intidx'] = int(removeVehCol.split('_')[-1])
-    removed_idx = int(removeVehCol.split('_')[-1])
-    row['removed_vehicles_multlabel'] = [0] * outputDim
-    row['removed_vehicles_multlabel'][removed_idx-1] = 1#数据集中实际上最多只有6辆车排队，移除车辆只能是car_position_1~5，对应位置0~4
-
-    #数据中，已经假定car_position_0,位置最小，car_position_19位置最大。随着index增大，位置增大。最大只有20辆车，car_position_19假定最接近该车道消失线
-    for i in range(19):
-        pos_col = f"car_position_{i}"
-        speed_col = f"car_speed_{i}"
-        front_pos_col = f"car_position_{i+1}"
-        front_speed_col = f"car_speed_{i+1}"
-        
-        pos = row[pos_col]
-        front_pos = row[front_pos_col]
-        if pos == -1:
-            gap_col = f"car_gap_{i}"
-            dv_col = f"car_dv_{i}"
-            row[gap_col] = -1
-            row[dv_col] = -1
-
-        elif front_pos == -1:
-            gap_col = f"car_gap_{i}"
-            dv_col = f"car_dv_{i}"
-            row[gap_col] = row['intersection_pos'] - pos
-            row[dv_col] = row[speed_col]
-
-        else:
-           gap_col = f"car_gap_{i}"
-           dv_col = f"car_dv_{i}"
-           row[gap_col] = front_pos - pos
-           row[dv_col] =  row[front_speed_col] - row[speed_col]
-
-    row["car_gap_19"]   = row['intersection_pos'] - row["car_position_19"]
-    row["car_dv_19"]   =  row["car_speed_19"]
+   
     
     # 可选：更新 queued_vehicles
     
-    return row, removeVehCol,removed_idx
+    return row, removeVehCol,removeIntidx
 
 
         
@@ -480,8 +457,9 @@ def process_row(row):
         
     if n_queued <= 0:
         return row
-    removeVehIndex = np.random.randint(0, n_queued)
-    row1,colName,removed_idx = remove_onevehicle_slot(row,removeVehIndex)
+   
+    removeVehIndex = np.random.randint(0, n_queued) #:#removeVehIndex == 0~nqueue-1 ,如果为0,安装数据排列（car_pos_0POS最大，距离终点最近），就是距离主车最远的车
+    row1,colName,removed_idx = remove_onevehicle_slot(row,removeVehIndex)#removeVehIndex == 0~nqueue-1 ,如果为0,安装数据排列（car_pos_0POS最大，距离终点最近），就是距离主车最远的车
     return row1
 
 def genSamplesRemovingVehicleWithOneSlot(df):
