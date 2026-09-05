@@ -193,7 +193,7 @@ def setup_logger(args):
     # 文件处理器
     timestamp = generate_timestamp()
     RUN_START_TIME = timestamp
-    log_path = f"./tmpModes/trainlog_{timestamp}_{args.epochs}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}.log"
+    log_path = f"./tmpModes/W9_model{args.model}_trainlog_{timestamp}_{args.epochs}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}.log"
     file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
     file_handler.setLevel(log_level)
     file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
@@ -906,7 +906,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 best_val_mae = val_mae
                 best_epoch = epoch + 1
                 best_save_path = (
-                    f"{DIR_TMP_MODEL}/model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
+                    f"{DIR_TMP_MODEL}/w9_model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
                     f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.h5"
                 )
                 model.save(best_save_path)
@@ -925,7 +925,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
     save_path =  (
-                    f"{DIR_TMP_MODEL}/model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
+                    f"{DIR_TMP_MODEL}/w9_model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
                     f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.h5"
                 )
     model.save(save_path)
@@ -972,6 +972,18 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
         args.lr, decay_steps=100, decay_rate=0.99, staircase=True
     )
     optimizer = Adam(learning_rate=lr_schedule)
+
+
+    # 优化器配置
+    steps_per_epoch = max(1, len(X_train) // args.batch_size)
+    total_steps = steps_per_epoch * args.epochs
+    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        args.lr, decay_steps=total_steps-10, decay_rate=0.99, staircase=True
+    )
+    #optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
+    #optimizer = Adam(learning_rate=args.lr, clipnorm=1.0)
+    optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5) #现阶段比较好
+    
     
     # 模型编译
     model_vanish_reg.compile(
