@@ -495,7 +495,7 @@ def build_stable_resnet(input_dim, output_dim, unit=256, layNum=4):
 
 def build_simple_resnet2(input_dim, output_dim, unit=256, layNum=8):
     """带Dropout预激活残差块，防过拟合，用于IDM参数解码"""
-    def resnet_block(x, units, dropout_rate=0.2):
+    def resnet_block(x, units, dropout_rate=0.001):
         shortcut = x
         y = BatchNormalization()(x)
         y = ReLU()(y)
@@ -557,7 +557,7 @@ def build_simple_resnet_regress(input_dim, output_dim, unit=256, layNum=8):
 
 def build_simple_resnet_regress2(input_dim, output_dim, unit=128, layNum=4):
     """轻量化带Dropout回归网络，直接预测消失时间"""
-    def resnet_block(x, units, dropout_rate=0.2):
+    def resnet_block(x, units, dropout_rate=0.001):
         shortcut = x
         y = BatchNormalization()(x)
         y = ReLU()(y)
@@ -589,7 +589,7 @@ def build_simple_resnet_regress2(input_dim, output_dim, unit=128, layNum=4):
 
 def build_simple_resnet_regress3(input_dim, output_dim, unit=128, layNum=4):
     """轻量化带Dropout回归网络，直接丢失车辆的slot_multlabel预测"""
-    def resnet_block(x, units, dropout_rate=0.2):
+    def resnet_block(x, units, dropout_rate=0.001):
         shortcut = x
         y = BatchNormalization()(x)
         y = ReLU()(y)

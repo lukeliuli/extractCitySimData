@@ -448,7 +448,7 @@ def build_stable_resnet(input_dim, output_dim, unit=256, layNum=4):
 
 def build_simple_resnet2(input_dim, output_dim, unit=256, layNum=8):
     """带Dropout预激活残差块，防过拟合，用于IDM参数解码"""
-    def resnet_block(x, units, dropout_rate=0.2):
+    def resnet_block(x, units, dropout_rate=0.001):
         shortcut = x
         y = BatchNormalization()(x)
         y = ReLU()(y)
@@ -510,7 +510,7 @@ def build_simple_resnet_regress(input_dim, output_dim, unit=256, layNum=8):
 
 def build_simple_resnet_regress2(input_dim, output_dim, unit=128, layNum=4):
     """轻量化带Dropout回归网络，直接预测消失时间"""
-    def resnet_block(x, units, dropout_rate=0.2):
+    def resnet_block(x, units, dropout_rate=0.001):
         shortcut = x
         y = BatchNormalization()(x)
         y = ReLU()(y)
@@ -542,7 +542,7 @@ def build_simple_resnet_regress2(input_dim, output_dim, unit=128, layNum=4):
 
 def build_simple_resnet_regress3(input_dim, output_dim, unit=128, layNum=4):
     """轻量化带Dropout回归网络，直接丢失车辆的slot_multlabel预测"""
-    def resnet_block(x, units, dropout_rate=0.2):
+    def resnet_block(x, units, dropout_rate=0.001):
         shortcut = x
         y = BatchNormalization()(x)
         y = ReLU()(y)
@@ -1492,17 +1492,18 @@ def main(args):
     if args.model == 0:
         # 模型0：MLP+CF端到端训练
         
-        args.batch_size = X_train.shape[0]
-        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
+        train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train, raw_train))
+        # 保持每个batch形状一致以减少tf.function retracing并降低编译开销
+        #train_dataset = train_dataset.cache().batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
         train_dataset = train_dataset.batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
-        
-        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val))
+
+        val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val, raw_val))
         val_dataset = val_dataset.batch(args.batch_size).prefetch(tf.data.AUTOTUNE)
         
-        train_model_mlp_reg(
+        train_model_mlp_cf(
             X_train, y_train, raw_train,
             train_dataset, val_dataset, raw_cols,
-            args, dt, raw_val=raw_val
+            args, dt
         )
 
     elif args.model == 1:
