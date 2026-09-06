@@ -82,4 +82,4 @@ nohup python model9w99RTlost.py --num_types 4 --batch_size  380 --test_size 0.95
 nohup python model9w99RTlost.py --num_types 4 --batch_size 3900 --test_size 0.50 --epochs 1000 --lr 0.0005 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 1 --fixdata 0 --trainvalmode 0 --goffset 1 > modelRegTS50.log  
 nohup python model9w99RTlost.py --num_types 4 --batch_size 2300 --test_size 0.70 --epochs 1000 --lr 0.0005 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 1 --fixdata 0 --trainvalmode 0 --goffset 1 > modelRegTS70.log  
 nohup python model9w99RTlost.py --num_types 4 --batch_size  770 --test_size 0.90 --epochs 1000 --lr 0.0005 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 1 --fixdata 0 --trainvalmode 0 --goffset 1 > modelRegTS90.log  
-nohup python model9w99RTlost.py --num_types 4 --batch_size  380 --test_size 0.95 --epochs 1000 --lr 0.0005 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 1 --fixdata 0 --`trainvalmode 0 --goffset 1 > modelRegTS95.log  
+nohup python model9w99RTlost.py --num_types 4 --batch_size  380 --test_size 0.95 --epochs 1000 --lr 0.0005 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 1 --fixdata 0 --trainvalmode 0 --goffset 1 > modelRegTS95.log  

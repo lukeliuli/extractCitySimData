@@ -1001,23 +1001,33 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
     )
 
     best_val_mae = [float('inf')]   # 用 list 包裹，便于闭包修改
+    epoch_start_time = [0.0]       # 记录每个epoch开始时间
+
+    def on_epoch_begin(epoch, logs=None):
+        epoch_start_time[0] = time.time()
 
     def on_epoch_end(epoch,logs=None):
+        epoch_time = time.time() - epoch_start_time[0]
+        print(f"\nEpoch {epoch+1} time: {epoch_time:.1f}s\n")
+
         if epoch % 5 != 1:
             return
-        
+
         _, val_mae, _ = model_vanish_reg.evaluate(val_dataset, verbose=0)
         if val_mae < best_val_mae[0]:
             best_val_mae[0] = val_mae
             make_dir_safe(DIR_TMP_MODEL)
             save_path =  (
-                f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_{args.epochs}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
-                f"_mae_{val_mae:.2f}.h5"
+                f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_E{args.epochs}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
+                f"_{epoch}_mae_{val_mae:.2f}.h5"
             )
             model_vanish_reg.save(save_path)
+            weight_path = save_path.replace('.h5', '_weight.h5')
+            model_vanish_reg.save_weights(weight_path)
             logging.info(f"New best reg model saved (min val MAE)_mae_{val_mae:.2f}: {save_path}")
+            logging.info(f"Model weights saved: {weight_path}")
 
-    cb = LambdaCallback(on_epoch_end=on_epoch_end)
+    cb = LambdaCallback(on_epoch_begin=on_epoch_begin, on_epoch_end=on_epoch_end)
    
 
     # 模型训练
@@ -1057,10 +1067,12 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
     save_path =  (
-                    f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_{args.epochs}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
-                    f"_mae_{val_mae:.2f}.h5"
+                    f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_E{args.epochs}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
+                    f"_{args.epochs}_mae_{val_mae:.2f}.h5"
                 )
     model_vanish_reg.save(save_path)
+    weight_path = save_path.replace('.h5', '_weight.h5')
+    model_vanish_reg.save_weights(weight_path)
     logging.info(f"Model 1 saved to: {save_path}")
 
     return model_vanish_reg
