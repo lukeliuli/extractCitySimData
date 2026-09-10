@@ -21,6 +21,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.cluster import KMeans
 from tensorflow.keras.models import load_model
 #tf.debugging.enable_check_numerics() 
+
+gpus = tf.config.list_physical_devices('GPU')
+if gpus and 'RTX' in gpus[0].name.upper():
+    tf.keras.mixed_precision.set_global_policy('mixed_float16') 
 # ===================== 本地模块导入 =====================
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from tf_fvdm_simulation import tf_fvdm_simulation
