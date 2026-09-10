@@ -807,7 +807,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             f"RMSE: {train_rmse:.4f}, MAE: {train_mae:.4f}")
    
         #--------------------------------------------- 验证逻辑
-        if epoch % 10 == 0 or epoch == args.epochs - 1:
+        if epoch % 3 == 0 or epoch == args.epochs - 1:
             logging.info("\n===== 验证阶段开始 =====")
             val_errs = []
             val_loss_metric = tf.keras.metrics.Mean() 
