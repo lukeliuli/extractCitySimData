@@ -612,15 +612,23 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
 
     param_bounds = get_param_bounds(num_types)
     
-    # 优化器配置
+    # 优化器配置：余弦退火 + 暖重启（SGDR）
+    # 每 first_restart 个步长，学习率先周期性回升再余弦衰减，
+    # 让模型周期性"重新出发"，跳出早期局部最优，避免最优 MAE 卡在 E1
     steps_per_epoch = max(1, len(X_train) // args.batch_size)
     total_steps = steps_per_epoch * args.epochs
-    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        args.lr, decay_steps=total_steps-10, decay_rate=0.99, staircase=True
-    )
-    #optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
-    #optimizer = Adam(learning_rate=args.lr, clipnorm=1.0)
-    optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5) #现阶段比较好
+
+    initial_lr     = args.lr                        # Adam 系用常规学习率，如 0.0005
+    restart_epochs = 50                             # 每 50 个 epoch 重启一次
+    first_restart  = steps_per_epoch * restart_epochs  # 换算成步数
+
+    lr_schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
+        initial_learning_rate=initial_lr,
+        first_decay_steps=first_restart,   # 一个周期包含的步数
+        t_mul=2.0,                         # 每周期时长翻倍
+        m_mul=0.5,                         # 每周期峰值 LR 减半
+        alpha=initial_lr * 0.001)          # 周期末最低 LR（≈0）
+    optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5) # 现阶段比较好
         
 
 
