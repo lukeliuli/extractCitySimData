@@ -111,6 +111,17 @@ BASE_BOUND_VEHICLE = [
     (1.0, 9.0),        # b 舒适减速度 [m/s²]
     (0.01, 1.0)        # rtime 反应时间 [s]
 ]
+'''
+
+========= 验证集参数统计 (best_epoch1) ==========
+    group                param  count    mean    var    std  median      q1      q3     min     max  mode_prop                                  mode_range     skew     kurt  prop_at_min  prop_at_max
+all_types                   v0   7000 20.7083 0.0000 0.0000 20.7083 20.7083 20.7083 20.7083 20.7083     1.0000      (20.70833396911621, 20.72833396911621)   0.0000   0.0000       0.0000       0.0000
+all_types                    T   7000  1.0500 0.8668 0.9310  1.0500  0.1190  1.9810  0.1190  1.9810     0.5000  (0.11900000274181366, 0.15624000400304794)   0.0000  -2.0000       0.5000       0.5000
+all_types                   s0   7000  0.6000 0.1537 0.3920  0.6000  0.2080  0.9920  0.2080  0.9920     0.5000  (0.20800000429153442, 0.22368000388145448)   0.0000  -2.0000       0.5000       0.5000
+all_types                    a   7000  1.0500 0.0000 0.0000  1.0500  1.0500  1.0500  1.0500  1.0500     1.0000    (1.0499999523162842, 1.0699999523162842)   0.0000   0.0000       0.0000       0.0000
+all_types                    b   7000  8.9200 0.0000 0.0000  8.9200  8.9200  8.9200  8.9200  8.9200     1.0000      (8.920000076293945, 8.940000076293945)   0.0000   0.0000       0.0000       0.0000
+all_types                rtime   7000  0.5283 0.2348 0.4845  0.9901  0.0199  0.9901  0.0199  0.9901     0.5240    (0.9706960256025196, 0.9901000261306763)  -0.0961  -1.9908       0.4760       0.5240
+'''
 # 保存目录常量
 DIR_TMP_MODEL = "./tmpModes"
 DIR_EVAL_MODEL0 = "./evaluation_results_model0"
@@ -841,8 +852,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 best_val_mae = val_mae
                 best_epoch = epoch + 1
                 best_save_path = (
-                    f"{DIR_TMP_MODEL}/idm_model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
-                    f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.h5"
+                    f"{DIR_TMP_MODEL}/idm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
+                    f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.keras"
                 )
                 model.save(best_save_path)
                 logging.info(f"New best model saved (min val MAE): {best_save_path}")
@@ -860,8 +871,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
     save_path =  (
-                    f"{DIR_TMP_MODEL}/idm_model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
-                    f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.h5"
+                    f"{DIR_TMP_MODEL}/idm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
+                    f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.keras"
                 )
     model.save(save_path)
     logging.info(f"Model 0 saved to: {save_path}")
@@ -928,7 +939,7 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
             make_dir_safe(DIR_TMP_MODEL)
             save_path =  (
                 f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_{args.epochs}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
-                f"_mae_{val_mae:.2f}.h5"
+                f"_mae_{val_mae:.2f}.keras"
             )
             model_vanish_reg.save(save_path)
             logging.info(f"New best reg model saved (min val MAE)_mae_{val_mae:.2f}: {save_path}")
@@ -962,7 +973,7 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
     timestamp = generate_timestamp()
     save_path =  (
                     f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_{args.epochs}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
-                    f"_mae_{val_mae:.2f}.h5"
+                    f"_mae_{val_mae:.2f}.keras"
                 )
     model_vanish_reg.save(save_path)
     logging.info(f"Model 1 saved to: {save_path}")
@@ -1082,7 +1093,7 @@ def train_model_mlp_missonly(X_train, y_miss_train, raw_train, train_dataset, va
     # 7. 保存模型
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
-    model_path = f"{DIR_TMP_MODEL}/model_missvehmultlabel_{timestamp}.h5"
+    model_path = f"{DIR_TMP_MODEL}/model_missvehmultlabel_{timestamp}.keras"
     model.save(model_path)
     logging.info(f"多标签模型已保存至: {model_path}")
 
@@ -1432,13 +1443,15 @@ def main(args):
     y = (df_fixed['time_to_vanish'].values / 30.0).astype(np.float32)#注意这里训练样本的y/30,以秒为单位，后面还有log化
     raw_data_for_sim = df_fixed[raw_cols].values.astype(np.float32)
 
+
+    np.random.seed(42)
     X_train, X_val, y_train, y_val, raw_train, raw_val = train_test_split(
         X, y, raw_data_for_sim, 
         test_size=args.test_size, 
         random_state=42
     )
     
-
+  
     #y = np.log(y) #注意y对数化了---------------------------------------------------------------------这里y对数化了
     
     if args.trainvalmode == 1:
@@ -1539,14 +1552,14 @@ def main(args):
         #只预测，不训练，最终实现slot和vanish的预测，slot预测使用训练好的mlp_multlabel模型，vanish预测使用训练好的mlp_cf模型
         
         if args.model == 3:
-            model_path = f"./tmpModes/idmmodel0_20260831_102055_0_0_300_0_epoch_11_mae_0.9731.h5"
+            model_path = f"./tmpModes/idmmodel0_20260831_102055_0_0_300_0_epoch_11_mae_0.9731.keras"
             mlpcfModel = load_model(model_path)
             modelVanishPredict = mlpcfModel
             logger.info(f"加载CF模型成功")
 
 
         if args.model == 4:
-            model_pathT = f"./tmpModes/model1_reg_20260826_130038_1000_0_1172_0_mae_1.30.h5"
+            model_pathT = f"./tmpModes/model1_reg_20260826_130038_1000_0_1172_0_mae_1.30.keras"
             mlpw99regModel = load_model(model_pathT,custom_objects={'rmse': rmse})
             modelVanishPredict = mlpw99regModel
             logger.info(f"加载回归模型成功")
@@ -1564,7 +1577,7 @@ def main(args):
             # 1. 首先使用missModel预测哪些slot有丢失车辆
             # 2. 根据预测结果确定需要修补的位置
             # 3. 使用前后车偏移方法进行数据修补
-            model_path = f"./tmpModes/model_missvehmultlabel_20260903_143007.h5"
+            model_path = f"./tmpModes/model_missvehmultlabel_20260903_143007.keras"
             missModel = load_model(model_path)
 
             

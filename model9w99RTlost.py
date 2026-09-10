@@ -117,6 +117,22 @@ BASE_BOUND_VEHICLE = [
     (1.0, 3.0),   # 8: CC8 (启动加速度) [m/s²]
     (0.5, 1.5)    # 9: CC9 (高速加速度) [m/s²]
 ]
+
+#根据结果优化
+BASE_BOUND_VEHICLE = [
+    (0.7, 3.0),   # 0: CC0 (停车间距) [m]
+    (0.3, 4.0),   # 1: CC1 (车头时距) [s]
+    (0.1, 20),   # 2: CC2  SDX=ABX+CC2,安全距离附加值
+    (0.5, 9.0),   # 3: CC3  following状态下的D值,对应的速度差的权重
+    (-6.0, 0.0001), # 4: CC4 (负的相对速度阈值) [m/s]CLDV 为负
+    (0.0001, 6.0),  # 5: CC5 (正的相对速度阈值) [m/s] OPDV，为正
+    (1.0,9.0), # 6: CC6   following状态下的D值,对应的速度差的权重
+    (2.0, 8.0),   # 7: CC7 (加速度波动) [m/s²]
+    (2.0, 4.0),   # 8: CC8 (启动加速度) [m/s²]
+    (0.5, 1.8)    # 9: CC9 (高速加速度) [m/s²]
+]
+
+
 # 保存目录常量
 DIR_TMP_MODEL = "./tmpModes"
 DIR_EVAL_MODEL0 = "./evaluation_results_model0"
@@ -193,7 +209,7 @@ def setup_logger(args):
     # 文件处理器
     timestamp = generate_timestamp()
     RUN_START_TIME = timestamp
-    log_path = f"./tmpModes/W9_model{args.model}_trainlog_{timestamp}_{args.epochs}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}.log"
+    log_path = f"./tmpModes/W9_model{args.model}_trainlog_{timestamp}_E{args.epochs}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}.log"
     file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
     file_handler.setLevel(log_level)
     file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
@@ -906,8 +922,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 best_val_mae = val_mae
                 best_epoch = epoch + 1
                 best_save_path = (
-                    f"{DIR_TMP_MODEL}/w9_model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
-                    f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.h5"
+                    f"{DIR_TMP_MODEL}/w9_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
+                    f"_epoch_{best_epoch}_mae_{best_val_mae:.2f}.keras"
                 )
                 model.save(best_save_path)
                 logging.info(f"New best model saved (min val MAE): {best_save_path}")
@@ -925,8 +941,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
     save_path =  (
-                    f"{DIR_TMP_MODEL}/w9_model0_{RUN_START_TIME}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}"
-                    f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.h5"
+                    f"{DIR_TMP_MODEL}/w9_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
+                    f"_epoch_{best_epoch}_mae_{best_val_mae:.2f}.keras"
                 )
     model.save(save_path)
     logging.info(f"Model 0 saved to: {save_path}")
@@ -1019,10 +1035,10 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
             make_dir_safe(DIR_TMP_MODEL)
             save_path =  (
                 f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_E{args.epochs}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                f"_{epoch}_mae_{val_mae:.2f}.h5"
+                f"_{epoch}_mae_{val_mae:.2f}.keras"
             )
             model_vanish_reg.save(save_path)
-            weight_path = save_path.replace('.h5', '_weight.h5')
+            weight_path = save_path.replace('.keras', '.weights.h5')
             model_vanish_reg.save_weights(weight_path)
             logging.info(f"New best reg model saved (min val MAE)_mae_{val_mae:.2f}: {save_path}")
             logging.info(f"Model weights saved: {weight_path}")
@@ -1068,10 +1084,10 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
     timestamp = generate_timestamp()
     save_path =  (
                     f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_E{args.epochs}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                    f"_{args.epochs}_mae_{val_mae:.2f}.h5"
+                    f"_{args.epochs}_mae_{val_mae:.2f}.keras"
                 )
     model_vanish_reg.save(save_path)
-    weight_path = save_path.replace('.h5', '_weight.h5')
+    weight_path = save_path.replace('.keras', '.weights.h5')
     model_vanish_reg.save_weights(weight_path)
     logging.info(f"Model 1 saved to: {save_path}")
 
@@ -1190,7 +1206,7 @@ def train_model_mlp_missonly(X_train, y_miss_train, raw_train, train_dataset, va
     # 7. 保存模型
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
-    model_path = f"{DIR_TMP_MODEL}/model_missvehmultlabel_{timestamp}.h5"
+    model_path = f"{DIR_TMP_MODEL}/model_missvehmultlabel_{timestamp}.keras"
     model.save(model_path)
     logging.info(f"多标签模型已保存至: {model_path}")
 
@@ -1519,7 +1535,7 @@ def main(args):
     raw_data_for_sim = df_fixed[raw_cols].values.astype(np.float32)
 
     #y = np.log(y) #注意y对数化了---------------------------------------------------------------------这里y对数化了
-    
+    np.random.seed(42)
     if args.trainvalmode == 1:
         XMiss = X
         yMissmultlabel = np.stack(df_fixed['removed_vehicles_multlabel'].values).astype(np.float32)
@@ -1541,7 +1557,7 @@ def main(args):
             f"验证集: {len(Xmiss_val)} 样本"
         )
         
-        
+    np.random.seed(42) # 固定随机种子，保证数据划分一致    
     if args.trainvalmode == 0:
         # 1. 生成掩码：X 的所有特征有限 且 y 有限
         mask = np.isfinite(X).all(axis=1) & np.isfinite(y)
@@ -1620,14 +1636,14 @@ def main(args):
         #只预测，不训练，最终实现slot和vanish的预测，slot预测使用训练好的mlp_multlabel模型，vanish预测使用训练好的mlp_cf模型
         
         if args.model == 3:
-            model_path = f"./tmpModes/model0_20260826_124623_0_0_1100_0_epoch_31_mae_1.1801.h5"
+            model_path = f"./tmpModes/model0_20260826_124623_0_0_1100_0_epoch_31_mae_1.1801.keras"
             mlpw99cfModel = load_model(model_path)
             modelVanishPredict = mlpw99cfModel
             logger.info(f"加载CF模型成功")
 
 
         if args.model == 4:
-            model_pathT = f"./tmpModes/model1_reg_20260826_130038_1000_0_1172_0_mae_1.30.h5"
+            model_pathT = f"./tmpModes/model1_reg_20260826_130038_1000_0_1172_0_mae_1.30.keras"
             mlpw99regModel = load_model(model_pathT,custom_objects={'rmse': rmse})
             modelVanishPredict = mlpw99regModel
             logger.info(f"加载回归模型成功")
@@ -1645,7 +1661,7 @@ def main(args):
             # 1. 首先使用missModel预测哪些slot有丢失车辆
             # 2. 根据预测结果确定需要修补的位置
             # 3. 使用前后车偏移方法进行数据修补
-            model_path = f"./tmpModes/model_missvehmultlabel_20260903_143007.h5"
+            model_path = f"./tmpModes/model_missvehmultlabel_20260903_143007.keras"
             missModel = load_model(model_path)
 
             
@@ -1742,13 +1758,13 @@ if __name__ == "__main__":
     parser.add_argument('--debug', action='store_true', help='启用Debug级别的日志信息')
     parser.add_argument('--dt', type=float, default=DEFAULT_DT, help='仿真时间步长')
     parser.add_argument('--nC', type=int, default=1000, help='抽样样本数量')
-    parser.add_argument('--model', type=int, default=0, help='0(MLP+CF),1(MLP+Regress),2(MLP+预测丢失slot的multlabel),3(丢失slot+vanish时间联合)')
+    parser.add_argument('--model', type=int, default=0, help='0(MLP+CF),1(MLP+Regress),2(MLP+预测丢失slot的multlabel),3(丢失slot+vanish时间联合)，4(丢失slot+vanish时间联合回归)')
     parser.add_argument('--fixdata', type=int, default=0, help='0(不修补),1(原始数据补),2(前后车偏移补),3 模型预测修补，前后车偏移补')
     parser.add_argument('--goffset', type=int, default=1, help='仿真全局偏移参数开关')
     parser.add_argument('--trainvalmode', type=int, default=0, help='0(无丢失,只有vanish),1(有丢失,有misss数据)')
     
-    parser.add_argument('--lambda_veh', type=float, default=0.000, help='车参数方差正则强度')
-    parser.add_argument('--lambda_glo', type=float, default=0.000, help='全局2参数方差正则强度')
+    parser.add_argument('--lambda_veh', type=float, default=0.00000, help='车参数方差正则强度')
+    parser.add_argument('--lambda_glo', type=float, default=0.00000, help='全局2参数方差正则强度')
 
     args = parser.parse_args()
     main(args)
