@@ -217,3 +217,10 @@ simulation_frames/
 *.pkl
 *.h5
 *.png
+models/
+*.log
+*.keras
+*.csv
+ex*/
+*.jpg
+*.jpeg
