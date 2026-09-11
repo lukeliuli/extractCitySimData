@@ -139,6 +139,13 @@ BASE_BOUND_VEHICLE = [
     (0.5, 1.8)    # 9: CC9 (高速加速度) [m/s²]
 ]
 
+gpus = tf.config.list_physical_devices('GPU')
+if gpus and 'RTX' in gpus[0].name.upper():
+    tf.keras.mixed_precision.set_global_policy('mixed_float16')
+    logging.info("mixed_float16 is opened")
+else:
+    logging.info("mixed_float16 is not opened")
+    
 
 # 保存目录常量
 DIR_TMP_MODEL = "./tmpModes"
