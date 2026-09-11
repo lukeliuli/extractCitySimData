@@ -3,9 +3,9 @@
 #-----------------------------------
 #没有丢失数据状态下,idm跟车模型0的训练,家用2060
 
-python model9idmRTlost.py  --num_types 4 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > idmTest1_nc0.log
-python model9fvdmRTlost.py --num_types 4 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > fvdmTest1_nc0.log
-python model9w99RTlost.py  --num_types 4 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > w99Test1_nc0.log
+python model9idmRTlost.py  --num_types 4 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > idmTest1_nc0.log &
+python model9fvdmRTlost.py --num_types 4 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > fvdmTest1_nc0.log &
+python model9w99RTlost.py  --num_types 4 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > w99Test1_nc0.log &
 
 
 
