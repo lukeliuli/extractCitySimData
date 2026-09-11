@@ -25,6 +25,7 @@ from tensorflow.keras.models import load_model
 gpus = tf.config.list_physical_devices('GPU')
 if gpus and 'RTX' in gpus[0].name.upper():
     tf.keras.mixed_precision.set_global_policy('mixed_float16')
+    print("mixed_float16 is opened")
 
 
 # ===================== 本地模块导入 =====================
@@ -943,7 +944,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             )
 
             # 保存验证集最小MAE的模型
-            if val_mae < best_val_mae:
+            if val_mae < best_val_mae :
                 best_val_mae = val_mae
                 best_epoch = epoch + 1
                 best_save_path = (
@@ -952,6 +953,14 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 )
                 model.save(best_save_path)
                 logging.info(f"New best model saved (min val MAE): {best_save_path}")
+
+            if  epoch % 30 == 0:
+                save_path = (
+                    f"{DIR_TMP_MODEL}/w9_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
+                    f"_epoch_{epoch}_mae_{val_mae:.2f}.keras"
+                )
+                model.save(save_path)
+                logging.info(f"just save the model: {save_path}")
 
             # ---- 新最优模型：输出其参数分布统计 ----
             all_real_params = np.concatenate(val_real_params, axis=0)
