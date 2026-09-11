@@ -24,12 +24,7 @@ from tensorflow.keras.models import load_model
 
 import tensorflow as tf
 
-gpus = tf.config.list_physical_devices('GPU')
-if gpus and 'RTX' in gpus[0].name.upper():
-    tf.keras.mixed_precision.set_global_policy('mixed_float16')
-    logging.info("mixed_float16 is opened")
-else:
-    logging.info("mixed_float16 is not opened")
+#tf.keras.mixed_precision.set_global_policy('mixed_float16') #2060开启，也没有用
 
 # ===================== 本地模块导入 =====================
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))

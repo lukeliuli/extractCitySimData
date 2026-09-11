@@ -22,10 +22,7 @@ from sklearn.cluster import KMeans
 from tensorflow.keras.models import load_model
 #tf.debugging.enable_check_numerics() 
 
-gpus = tf.config.list_physical_devices('GPU')
-if gpus and 'RTX' in gpus[0].name.upper():
-    tf.keras.mixed_precision.set_global_policy('mixed_float16')
-    print("mixed_float16 is opened")
+
 
 
 # ===================== 本地模块导入 =====================
@@ -145,7 +142,7 @@ if gpus and 'RTX' in gpus[0].name.upper():
     logging.info("mixed_float16 is opened")
 else:
     logging.info("mixed_float16 is not opened")
-    
+
 
 # 保存目录常量
 DIR_TMP_MODEL = "./tmpModes"
@@ -1807,6 +1804,9 @@ if __name__ == "__main__":
     parser.add_argument('--lambda_veh', type=float, default=0.00000, help='车参数方差正则强度')
     parser.add_argument('--lambda_glo', type=float, default=0.00000, help='全局2参数方差正则强度')
 
+
+    #tf.keras.mixed_precision.set_global_policy('mixed_float16') #2060开启，也没有用
+ 
     args = parser.parse_args()
     main(args)
 
