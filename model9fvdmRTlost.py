@@ -106,12 +106,12 @@ BASE_BOUND_VEHICLE = [
 #2026-08-25 16:09:36 [INFO] - Validation Results - RMSE: 1.8879, MAE: 1.3736, MSE: 3.5463
 # FVDM参数边界（最终激活）：v0, alpha, lam, length, tanhP1, rtime
 BASE_BOUND_VEHICLE = [
-    (22, 36),          # v0 期望速度 [m/s]
+    (10, 36),          # v0 期望速度 [m/s]
     (0.1, 1.0),        # alpha 灵敏度系数
     (0.5, 5.0),        # lam 相对速度灵敏度
-    (1.0, 6.0),        # length 车长 [m]
+    (2.0, 6.0),        # length 车长 [m]
     (1.0, 9.0),        # tanhP1 期望速度曲线参数
-    (0.01, 1.0)        # rtime 反应时间 [s]
+    (0.01, 2.0)        # rtime 反应时间 [s]
 ]
 # 保存目录常量
 DIR_TMP_MODEL = "./tmpModes"
@@ -119,10 +119,10 @@ DIR_EVAL_MODEL0 = "./evaluation_results_model0"
 DIR_EVAL_MODEL1 = "./evaluation_results_model1"
 
 # 仿真相关常量
-DEFAULT_DT = 0.5
+DEFAULT_DT = 0.1
 DEFAULT_N_CLUSTERS = 100
 MIN_GAP = 0.5  # 车辆最小间距
-OFFSET_DISTANCE = 5.0  # 补全车辆位置偏移量
+OFFSET_DISTANCE = 8.0  # 补全车辆位置偏移量
 OVERSAMPLE_FACTOR = 2.0  # 丢失车辆样本过采样因子
 
 # 日志格式
@@ -189,7 +189,7 @@ def setup_logger(args):
     # 文件处理器
     timestamp = generate_timestamp()
     RUN_START_TIME = timestamp
-    log_path = f"./tmpModes/fvdm_trainlog_{timestamp}_{args.epochs}_{args.model}_{args.trainvalmode}_{args.batch_size}_{args.fixdata}.log"
+    log_path = f"./tmpModes/fvdm_trainlog_{timestamp}_E{args.epochs}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}.log"
     file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
     file_handler.setLevel(log_level)
     file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
@@ -605,6 +605,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     param_bounds = get_param_bounds(num_types)
     
     # 优化器配置
+    '''
     steps_per_epoch = max(1, len(X_train) // args.batch_size)
     total_steps = steps_per_epoch * args.epochs
     lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
@@ -613,8 +614,25 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     #optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
     #optimizer = Adam(learning_rate=args.lr, clipnorm=1.0)
     optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5) #现阶段比较好
-        
+    '''
 
+        # 优化器配置：余弦退火 + 暖重启（SGDR）
+    # 每 first_restart 个步长，学习率先周期性回升再余弦衰减，
+    # 让模型周期性"重新出发"，跳出早期局部最优，避免最优 MAE 卡在 E1
+    steps_per_epoch = max(1, len(X_train) // args.batch_size)
+    total_steps = steps_per_epoch * args.epochs
+
+    initial_lr     = args.lr                        # Adam 系用常规学习率，如 0.0005
+    restart_epochs = 50                             # 每 50 个 epoch 重启一次
+    first_restart  = steps_per_epoch * restart_epochs  # 换算成步数
+
+    lr_schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
+        initial_learning_rate=initial_lr,
+        first_decay_steps=first_restart,   # 一个周期包含的步数
+        t_mul=2.0,                         # 每周期时长翻倍
+        m_mul=0.5,                         # 每周期峰值 LR 减半
+        alpha=initial_lr * 0.001)          # 周期末最低 LR（≈0）
+    optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5) # 现阶段比较好
 
     #
     '''
@@ -850,6 +868,16 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 model.save(best_save_path)
                 logging.info(f"New best model saved (min val MAE): {best_save_path}")
 
+
+            if epoch % 30 == 0:
+                save_path = (
+                    f"{DIR_TMP_MODEL}/fvdm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
+                    f"_epoch_{epoch}_mae_{val_mae:.2f}.keras"
+                )
+                model.save(save_path)
+                logging.info(f"New best model saved (min val MAE): {save_path}")
+
+
             # ---- 新最优模型：输出其参数分布统计 ----
             all_real_params = np.concatenate(val_real_params, axis=0)
             all_scene_offset = np.concatenate(val_scene_offset, axis=0)
@@ -864,7 +892,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     timestamp = generate_timestamp()
     save_path =  (
                     f"{DIR_TMP_MODEL}/fvdm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                    f"_epoch_{best_epoch}_mae_{best_val_mae:.2f}.keras"
+                    f"_bestfinal_{best_epoch}_mae_{best_val_mae:.2f}.keras"
                 )
     model.save(save_path)
     logging.info(f"Model 0 saved to: {save_path}")

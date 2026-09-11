@@ -7,6 +7,7 @@ import matplotlib.animation as animation
 import imageio
 from matplotlib.patches import Rectangle, Circle
 import logging
+matplotlib.use("Agg")            # 无头绘图，免 GUI 开销
 
 # 日志配置
 logging.basicConfig(
