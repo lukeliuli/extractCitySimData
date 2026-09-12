@@ -871,11 +871,19 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 model.save(best_save_path)
                 logging.info(f"New best model saved (min val MAE): {best_save_path}")
 
+            if  epoch % 30 == 0:
+                    save_path = (
+                    f"{DIR_TMP_MODEL}/idm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
+                    f"_epoch_{epoch}_mae_{val_mae:.4f}.keras"
+                    )
+                    model.save(save_path)
+                    logging.info(f"just save the model: {save_path}")
+
             # ---- 新最优模型：输出其参数分布统计 ----
             all_real_params = np.concatenate(val_real_params, axis=0)
             all_scene_offset = np.concatenate(val_scene_offset, axis=0)
             report_val_params_stats(all_real_params, all_scene_offset, tag=f"best_epoch{best_epoch}")
-     
+            
     
 
             gc.collect()
@@ -885,7 +893,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     timestamp = generate_timestamp()
     save_path =  (
                     f"{DIR_TMP_MODEL}/idm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                    f"_epoch_{best_epoch}_mae_{best_val_mae:.4f}.keras"
+                    f"_bestfinal_{best_epoch}_mae_{best_val_mae:.4f}.keras"
                 )
     model.save(save_path)
     logging.info(f"Model 0 saved to: {save_path}")
@@ -1566,6 +1574,9 @@ def main(args):
         
         if args.model == 3:
             model_path = f"./tmpModes/idmmodel0_20260831_102055_0_0_300_0_epoch_11_mae_0.9731.keras"
+            model_path = f"./models/idm_model0_20260910_065644_M0_T0_B1300_F0_epoch_1_mae_0.7541.keras"
+            #model_path = f"./models/idm_model0_20260909_052137_M0_T0_B3900_F0_epoch_121_mae_1.4947.keras"
+            
             mlpcfModel = load_model(model_path)
             modelVanishPredict = mlpcfModel
             logger.info(f"加载CF模型成功")

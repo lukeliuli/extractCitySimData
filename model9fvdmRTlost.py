@@ -106,12 +106,12 @@ BASE_BOUND_VEHICLE = [
 #2026-08-25 16:09:36 [INFO] - Validation Results - RMSE: 1.8879, MAE: 1.3736, MSE: 3.5463
 # FVDM参数边界（最终激活）：v0, alpha, lam, length, tanhP1, rtime
 BASE_BOUND_VEHICLE = [
-    (10, 36),          # v0 期望速度 [m/s]
+    (22, 36),          # v0 期望速度 [m/s]
     (0.1, 1.0),        # alpha 灵敏度系数
     (0.5, 5.0),        # lam 相对速度灵敏度
-    (2.0, 6.0),        # length 车长 [m]
+    (1.0, 6.0),        # length 车长 [m]
     (1.0, 9.0),        # tanhP1 期望速度曲线参数
-    (0.01, 2.0)        # rtime 反应时间 [s]
+    (0.01, 1.0)        # rtime 反应时间 [s]
 ]
 # 保存目录常量
 DIR_TMP_MODEL = "./tmpModes"
@@ -605,7 +605,6 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     param_bounds = get_param_bounds(num_types)
     
     # 优化器配置
-    '''
     steps_per_epoch = max(1, len(X_train) // args.batch_size)
     total_steps = steps_per_epoch * args.epochs
     lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
@@ -614,9 +613,8 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     #optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5)
     #optimizer = Adam(learning_rate=args.lr, clipnorm=1.0)
     optimizer = AdamW(learning_rate=lr_schedule, weight_decay=1e-5) #现阶段比较好
-    '''
-
-        # 优化器配置：余弦退火 + 暖重启（SGDR）
+        
+    # 优化器配置：余弦退火 + 暖重启（SGDR）
     # 每 first_restart 个步长，学习率先周期性回升再余弦衰减，
     # 让模型周期性"重新出发"，跳出早期局部最优，避免最优 MAE 卡在 E1
     steps_per_epoch = max(1, len(X_train) // args.batch_size)
@@ -794,7 +792,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             rem_batches = total_batches - batch_idx
             logging.info(
                 f"Batch {batch_idx}/{total_batches} | Loss: {loss.numpy():.4f} "
-                f"| Time: {t1-t0:.3f}s | Remain: {rem_batches}"
+                f"| Time: {t1-t0:.2f}s | Remain: {rem_batches}"
             )
 
             train_trues.append(y_batch.numpy())
@@ -863,20 +861,17 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 best_epoch = epoch + 1
                 best_save_path = (
                     f"{DIR_TMP_MODEL}/fvdm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                    f"_bestepoch_{epoch + 1}_mae_{best_val_mae:.3f}.keras"
+                    f"_bestepoch_{best_epoch}_mae_{best_val_mae:.2f}.keras"
                 )
                 model.save(best_save_path)
                 logging.info(f"New best model saved (min val MAE): {best_save_path}")
-
-
-            if epoch % 30 == 0:
+            if  epoch % 30 == 0:
                 save_path = (
                     f"{DIR_TMP_MODEL}/fvdm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                    f"_epoch_{epoch}_mae_{val_mae:.3f}.keras"
-                )
+                    f"_epoch_{epoch}_mae_{val_mae:.2f}.keras"
+                    )
                 model.save(save_path)
-                logging.info(f"New best model saved (min val MAE): {save_path}")
-
+                logging.info(f"just save the model: {save_path}")
 
             # ---- 新最优模型：输出其参数分布统计 ----
             all_real_params = np.concatenate(val_real_params, axis=0)
@@ -892,7 +887,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     timestamp = generate_timestamp()
     save_path =  (
                     f"{DIR_TMP_MODEL}/fvdm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                    f"_bestfinal_{best_epoch}_mae_{best_val_mae:.3f}.keras"
+                    f"_bestfinal_{best_epoch}_mae_{best_val_mae:.2f}.keras"
                 )
     model.save(save_path)
     logging.info(f"Model 0 saved to: {save_path}")
@@ -959,10 +954,10 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
             make_dir_safe(DIR_TMP_MODEL)
             save_path =  (
                 f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_E{args.epochs}_T{args.trainvalmode}_B{args.batch_size}_F  {args.fixdata}"
-                f"_mae_{val_mae:.3f}.keras"
+                f"_mae_{val_mae:.2f}.keras"
             )
             model_vanish_reg.save(save_path)
-            logging.info(f"New best reg model saved (min val MAE)_mae_{val_mae:.3f}: {save_path}")
+            logging.info(f"New best reg model saved (min val MAE)_mae_{val_mae:.2f}: {save_path}")
 
     cb = LambdaCallback(on_epoch_end=on_epoch_end)
    
@@ -993,7 +988,7 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
     timestamp = generate_timestamp()
     save_path =  (
                     f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_E{args.epochs}_T{args.trainvalmode}_B{args.batch_size}_F {args.fixdata}"
-                    f"_mae_{val_mae:.3f}.keras"
+                    f"_mae_{val_mae:.2f}.keras"
                 )
     model_vanish_reg.save(save_path)
     logging.info(f"Model 1 saved to: {save_path}")
