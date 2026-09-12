@@ -1675,6 +1675,7 @@ def main(args):
         
         if args.model == 3:
             model_path = f"./tmpModes/model0_20260826_124623_0_0_1100_0_epoch_31_mae_1.1801.keras"
+            model_path = f"./models/w9_model0_20260911_142551_M0_T0_B1300_F0_epoch_960_mae_1.45.keras"
             mlpw99cfModel = load_model(model_path)
             modelVanishPredict = mlpw99cfModel
             logger.info(f"加载CF模型成功")

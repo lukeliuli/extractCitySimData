@@ -1568,6 +1568,8 @@ def main(args):
         if args.model == 3:
             model_path = f"./tmpModes/fvdm_model0_20260831_104110_0_0_300_0_epoch_31_mae_1.2668.h5"
             model_path = f"./tmpModes/fvdm_model0_20260831_104110_0_0_300_0_epoch_31_mae_1.2668.keras"
+            model_path = f"./models/fvdm_model0_20260912_064114_M0_T0_B1300_F0_epoch_30_mae_1.34.keras"
+            
             mlpcfModel = load_model(model_path)
             modelVanishPredict = mlpcfModel
             logger.info(f"加载CF模型成功")

@@ -27,15 +27,11 @@ python model9w99RTlost.py --num_types 4 --batch_size 3900 --test_size 0.5 --epoc
 #家用2060
 python model9idmRTlost.py  --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 3 --fixdata 0 --trainvalmode 1 --goffset 1 > ex1_table1_idmM3F0T1.log
 python model9fvdmRTlost.py --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 3 --fixdata 0 --trainvalmode 1 --goffset 1 > ex1_table1_fvdmM3F0T1.log
-python model9w99RTlost.py  --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 3 --fixdata 0 --trainvalmode 1 --goffset 1 > ex1_table1_w99M3F0T1.log
+python model9w99RTlost.py  --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 3 --fixdata 0 --trainvalmode 1 --goffset 1 > ex1_table1_w99M3F0T1TS50.log
+
 python model9w99RTlost.py  --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 4 --fixdata 0 --trainvalmode 1 --goffset 1 > ex1_table1_regM3F0T1.log
 
 
-##for 远程大显存服务器
-python model9idmRTlost.py  --num_types 4 --batch_size 3900 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 3 --fixdata 0 --trainvalmode 1 --goffset 1 > idmM3F0T1.log
-python model9fvdmRTlost.py --num_types 4 --batch_size 3900 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 3 --fixdata 0 --trainvalmode 1 --goffset 1 > fvdmM3F0T1.log
-python model9w99RTlost.py  --num_types 4 --batch_size 3900 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 3 --fixdata 0 --trainvalmode 1 --goffset 1 > w99M3F0T1.log
-python model9w99RTlost.py  --num_types 4 --batch_size 3900 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 4 --fixdata 0 --trainvalmode 1 --goffset 1 > regM3F0T1.log
 
 
 
