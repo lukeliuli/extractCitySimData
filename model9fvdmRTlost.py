@@ -794,7 +794,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             rem_batches = total_batches - batch_idx
             logging.info(
                 f"Batch {batch_idx}/{total_batches} | Loss: {loss.numpy():.4f} "
-                f"| Time: {t1-t0:.2f}s | Remain: {rem_batches}"
+                f"| Time: {t1-t0:.3f}s | Remain: {rem_batches}"
             )
 
             train_trues.append(y_batch.numpy())
@@ -863,7 +863,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
                 best_epoch = epoch + 1
                 best_save_path = (
                     f"{DIR_TMP_MODEL}/fvdm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                    f"_epoch_{best_epoch}_mae_{best_val_mae:.2f}.keras"
+                    f"_bestepoch_{epoch + 1}_mae_{best_val_mae:.3f}.keras"
                 )
                 model.save(best_save_path)
                 logging.info(f"New best model saved (min val MAE): {best_save_path}")
@@ -872,7 +872,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
             if epoch % 30 == 0:
                 save_path = (
                     f"{DIR_TMP_MODEL}/fvdm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                    f"_epoch_{epoch}_mae_{val_mae:.2f}.keras"
+                    f"_epoch_{epoch}_mae_{val_mae:.3f}.keras"
                 )
                 model.save(save_path)
                 logging.info(f"New best model saved (min val MAE): {save_path}")
@@ -892,7 +892,7 @@ def train_model_mlp_cf(X_train, y_train, raw_train, train_dataset, val_dataset, 
     timestamp = generate_timestamp()
     save_path =  (
                     f"{DIR_TMP_MODEL}/fvdm_model0_{RUN_START_TIME}_M{args.model}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                    f"_bestfinal_{best_epoch}_mae_{best_val_mae:.2f}.keras"
+                    f"_bestfinal_{best_epoch}_mae_{best_val_mae:.3f}.keras"
                 )
     model.save(save_path)
     logging.info(f"Model 0 saved to: {save_path}")
@@ -959,10 +959,10 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
             make_dir_safe(DIR_TMP_MODEL)
             save_path =  (
                 f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_E{args.epochs}_T{args.trainvalmode}_B{args.batch_size}_F  {args.fixdata}"
-                f"_mae_{val_mae:.2f}.keras"
+                f"_mae_{val_mae:.3f}.keras"
             )
             model_vanish_reg.save(save_path)
-            logging.info(f"New best reg model saved (min val MAE)_mae_{val_mae:.2f}: {save_path}")
+            logging.info(f"New best reg model saved (min val MAE)_mae_{val_mae:.3f}: {save_path}")
 
     cb = LambdaCallback(on_epoch_end=on_epoch_end)
    
@@ -993,7 +993,7 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
     timestamp = generate_timestamp()
     save_path =  (
                     f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_E{args.epochs}_T{args.trainvalmode}_B{args.batch_size}_F {args.fixdata}"
-                    f"_mae_{val_mae:.2f}.keras"
+                    f"_mae_{val_mae:.3f}.keras"
                 )
     model_vanish_reg.save(save_path)
     logging.info(f"Model 1 saved to: {save_path}")
