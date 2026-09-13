@@ -7,6 +7,7 @@ python model9idmRTlost.py  --num_types 4 --batch_size 1300 --test_size 0.5 --epo
 python model9fvdmRTlost.py --num_types 4 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0002 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > fvdmTest1_nc0.log &
 python model9w99RTlost.py  --num_types 4 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0002 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > w99Test1_nc0.log &
 
+python model9w99RTlost.py  --num_types 4 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0002 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 1 --fixdata 0 --trainvalmode 0 --goffset 1 --mixed 1 > w99regTest1_nc0.log &
 
 
 python model9idmRTlost.py  --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 2000 --lr 0.0002 --unit 256 --layNum 128 --dt 0.1 --nC 7000 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > idmTest1_nc0.log
@@ -29,7 +30,7 @@ python model9idmRTlost.py  --num_types 4 --batch_size 1000 --test_size 0.5 --epo
 python model9fvdmRTlost.py --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 3 --fixdata 0 --trainvalmode 1 --goffset 1 > ex1_table1_fvdmM3F0T1.log
 python model9w99RTlost.py  --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 3 --fixdata 0 --trainvalmode 1 --goffset 1 > ex1_table1_w99M3F0T1TS50.log
 
-python model9w99RTlost.py  --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 4 --fixdata 0 --trainvalmode 1 --goffset 1 > ex1_table1_regM3F0T1.log
+python model9w99RTlost.py  --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 4 --fixdata 0 --trainvalmode 1 --goffset 1 > ex1_table1_regM3F0T1TS50.log
 
 
 
@@ -70,10 +71,10 @@ nohup python model9idmRTlost.py --num_types 3 --batch_size 1000 --test_size 0.5 
 nohup python model9idmRTlost.py --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 7000 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > idmNT4.log  
 
 
-nohup python model9w99RTlost.py --num_types 1 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 7000 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > w99NT1.log  
-nohup python model9w99RTlost.py --num_types 2 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 7000 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > w99NT2.log  
-nohup python model9w99RTlost.py --num_types 3 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 7000 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > w99NT3.log  
-nohup python model9w99RTlost.py --num_types 4 --batch_size 1000 --test_size 0.5 --epochs 1000 --lr 0.0001 --unit 256 --layNum 128 --dt 0.1 --nC 7000 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > w99NT4.log  
+nohup python model9w99RTlost.py --num_types 1 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0005 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > w99NT1.log  
+nohup python model9w99RTlost.py --num_types 2 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0005 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > w99NT2.log  
+nohup python model9w99RTlost.py --num_types 3 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0005 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > w99NT3.log  
+nohup python model9w99RTlost.py --num_types 4 --batch_size 1300 --test_size 0.5 --epochs 2000 --lr 0.0005 --unit 256 --layNum 128 --dt 0.1 --nC 0 --model 0 --fixdata 0 --trainvalmode 0 --goffset 1 > w99NT4.log  
 
 
 ##for 远程大显存服务器

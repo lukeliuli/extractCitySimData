@@ -1064,7 +1064,7 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
         epoch_time = time.time() - epoch_start_time[0]
         print(f"\nEpoch {epoch+1} time: {epoch_time:.1f}s\n")
 
-        if epoch % 5 != 1:
+        if epoch % 3 != 0:
             return
 
         _, val_mae, _ = model_vanish_reg.evaluate(val_dataset, verbose=0)
@@ -1073,13 +1073,13 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
             make_dir_safe(DIR_TMP_MODEL)
             save_path =  (
                 f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_E{args.epochs}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                f"_{epoch}_mae_{val_mae:.2f}.keras"
+                f"_bestepoch_{epoch+1}_mae_{val_mae:.2f}.keras"
             )
             model_vanish_reg.save(save_path)
-            weight_path = save_path.replace('.keras', '.weights.h5')
-            model_vanish_reg.save_weights(weight_path)
+            #weight_path = save_path.replace('.keras', '.weights.h5')
+            #model_vanish_reg.save_weights(weight_path)
             logging.info(f"New best reg model saved (min val MAE)_mae_{val_mae:.2f}: {save_path}")
-            logging.info(f"Model weights saved: {weight_path}")
+            #logging.info(f"Model weights saved: {weight_path}")
 
     cb = LambdaCallback(on_epoch_begin=on_epoch_begin, on_epoch_end=on_epoch_end)
    
@@ -1121,12 +1121,10 @@ def train_model_mlp_reg(X_train, y_train, raw_train, train_dataset, val_dataset,
     make_dir_safe(DIR_TMP_MODEL)
     timestamp = generate_timestamp()
     save_path =  (
-                    f"{DIR_TMP_MODEL}/model1_reg_{RUN_START_TIME}_E{args.epochs}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
-                    f"_{args.epochs}_mae_{val_mae:.2f}.keras"
+                    f"{DIR_TMP_MODEL}/w9_model1_reg_{RUN_START_TIME}_E{args.epochs}_T{args.trainvalmode}_B{args.batch_size}_F{args.fixdata}"
+                    f"_final{args.epochs}_mae_{val_mae:.2f}.keras"
                 )
     model_vanish_reg.save(save_path)
-    weight_path = save_path.replace('.keras', '.weights.h5')
-    model_vanish_reg.save_weights(weight_path)
     logging.info(f"Model 1 saved to: {save_path}")
 
     return model_vanish_reg
@@ -1682,7 +1680,11 @@ def main(args):
 
 
         if args.model == 4:
+            logger.info(f"开始加载回归模型")
             model_pathT = f"./tmpModes/model1_reg_20260826_130038_1000_0_1172_0_mae_1.30.keras"
+            model_pathT = f"./models/w9_model1_reg_20260912_172441_E2000_T0_B3908_F0_final2000_mae_0.79.keras"
+            model_pathT = f"./models/model1_reg_20260912_181829_E8000_T0_B3908_F0_bestepoch_658_mae_1.03.keras"
+        
             mlpw99regModel = load_model(model_pathT,custom_objects={'rmse': rmse})
             modelVanishPredict = mlpw99regModel
             logger.info(f"加载回归模型成功")
@@ -1804,11 +1806,17 @@ if __name__ == "__main__":
     
     parser.add_argument('--lambda_veh', type=float, default=0.00000, help='车参数方差正则强度')
     parser.add_argument('--lambda_glo', type=float, default=0.00000, help='全局2参数方差正则强度')
-
-
+    parser.add_argument('--mixed', type=int, default=0, help='2060 开启混合精度')
+    
+    
     #tf.keras.mixed_precision.set_global_policy('mixed_float16') #2060开启，也没有用
  
     args = parser.parse_args()
+
+    if args.mixed == 1 and args.model == 1:
+        #tf.keras.mixed_precision.set_global_policy('mixed_float16') #2060开启，也没有用
+        logging.info("2060 开启混合精度,没有什么用，那就关了")
+        
     main(args)
 
     # 停止性能分析
