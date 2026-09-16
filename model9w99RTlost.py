@@ -1482,9 +1482,10 @@ def main(args):
     # ===================== 2. 生成缺失数据样本 =====================
     # ===================== 3. 样本合并与过滤 =====================
     # 选择训练验证模式
-    if args.trainvalmode == 0:
+    if args.trainvalmode == 0 | args.trainvalmode == 2:
         df_all = df1
-    else:
+        
+    if args.trainvalmode == 1 :
         logger.info("生成缺失车辆样本...")
         # 生成不同数量丢失车辆的样本
         #print(df1.columns)
@@ -1616,6 +1617,39 @@ def main(args):
             f"验证集: {len(X_val)} 样本"
         )
 
+    elif args.trainvalmode == 2:
+        # 按主车速度 v0 分层分割（开区间）：训练集 v0 < v0split，验证集 v0 > v0split
+        # 边界 v0 == v0split 的样本被排除，两集严格不重叠
+        if args.model not in (0, 1, 4, 5):
+            raise ValueError(
+                f"trainvalmode=2 仅支持 --model 0/1/4/5（当前 model={args.model}）"
+            )
+
+        mask = np.isfinite(X).all(axis=1) & np.isfinite(y)
+        X, y, raw_data_for_sim = X[mask], y[mask], raw_data_for_sim[mask]
+
+        v0 = df_fixed['main_car_speed'].values[mask].astype(np.float32)
+        train_mask = v0 < args.v0split
+        val_mask = v0 > args.v0split
+
+        X_train, y_train, raw_train = X[train_mask], y[train_mask], raw_data_for_sim[train_mask]
+        X_val, y_val, raw_val = X[val_mask], y[val_mask], raw_data_for_sim[val_mask]
+
+        if len(X_train) == 0 or len(X_val) == 0:
+            raise ValueError(
+                f"trainvalmode=2 分割失败: 训练集 {len(X_train)} / 验证集 {len(X_val)}，"
+                f"请调整 --v0split={args.v0split}"
+            )
+
+        logger.info(
+            f"v0Split数据集构建完成 - 训练集: {len(X_train)} 样本 (v0<{args.v0split}), "
+            f"验证集: {len(X_val)} 样本 (v0>{args.v0split})"
+        )
+        logger.info(
+            f"v0分布 - 训练集: [{v0[train_mask].min():.2f}, {v0[train_mask].max():.2f}], "
+            f"验证集: [{v0[val_mask].min():.2f}, {v0[val_mask].max():.2f}]"
+        )
+
     # ===================== 7. 模型训练 =====================
     dt = args.dt or DEFAULT_DT
     logger.info(f"开始模型训练，仿真时间步长: {dt}")
@@ -1641,7 +1675,7 @@ def main(args):
 
     elif args.model == 1:
         # 模型1：MLP直接回归
-        args.batch_size = X_train.shape[0]
+        #args.batch_size = X_train.shape[0]
         train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
         train_dataset = train_dataset.batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
         
@@ -1656,7 +1690,7 @@ def main(args):
     elif args.model == 2:
         # 模型2：MLP+预测丢失slot的multlabel
         #Xmiss_train, Xmiss_val, ymiss_train, ymiss_val, rawmiss_train, rawmiss_val 
-        args.batch_size =Xmiss_train.shape[0]
+        #args.batch_size =Xmiss_train.shape[0]
         train_dataset = tf.data.Dataset.from_tensor_slices((Xmiss_train, ymiss_train))
         train_dataset = train_dataset.batch(args.batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
         
@@ -1802,7 +1836,8 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=int, default=0, help='0(MLP+CF),1(MLP+Regress),2(MLP+预测丢失slot的multlabel),3(丢失slot+vanish时间联合)，4(丢失slot+vanish时间联合回归)')
     parser.add_argument('--fixdata', type=int, default=0, help='0(不修补),1(原始数据补),2(前后车偏移补),3 模型预测修补，前后车偏移补')
     parser.add_argument('--goffset', type=int, default=1, help='仿真全局偏移参数开关')
-    parser.add_argument('--trainvalmode', type=int, default=0, help='0(无丢失,只有vanish),1(有丢失,有misss数据)')
+    parser.add_argument('--trainvalmode', type=int, default=0, help='0(无丢失,只有vanish),1(有丢失,有misss数据),2(按主车速度v0分割)')
+    parser.add_argument('--v0split', type=float, default=0, help='trainvalmode=2 时主车速度分割点(m/s)：训练集 v0<v0split，验证集 v0>v0split（开区间）')
     
     parser.add_argument('--lambda_veh', type=float, default=0.00000, help='车参数方差正则强度')
     parser.add_argument('--lambda_glo', type=float, default=0.00000, help='全局2参数方差正则强度')
