@@ -1373,7 +1373,7 @@ def main(args):
     # 选择训练验证模式
     if args.trainvalmode == 0 | args.trainvalmode == 2:
         df_all = df1
-     if args.trainvalmode == 1:
+    if args.trainvalmode == 1:
         logger.info("生成缺失车辆样本...")
         # 生成不同数量丢失车辆的样本
         #print(df1.columns)
