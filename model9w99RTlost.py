@@ -1650,6 +1650,39 @@ def main(args):
             f"验证集: [{v0[val_mask].min():.2f}, {v0[val_mask].max():.2f}]"
         )
 
+    elif args.trainvalmode == 3:
+        # 按主车前面排队车辆数分层分割（开区间）：训练集 queued_vehicles < quesplit，
+        # 验证集 queued_vehicles > quesplit，边界 ==quesplit 的样本排除，两集不重叠
+        if args.model not in (0, 1, 4, 5):
+            raise ValueError(
+                f"trainvalmode=3 仅支持 --model 0/1/4/5（当前 model={args.model}）"
+            )
+
+        mask = np.isfinite(X).all(axis=1) & np.isfinite(y)
+        X, y, raw_data_for_sim = X[mask], y[mask], raw_data_for_sim[mask]
+
+        nqueued = df_fixed['queued_vehicles'].values[mask].astype(np.int32)
+        train_mask = nqueued < args.quesplit
+        val_mask = nqueued > args.quesplit
+
+        X_train, y_train, raw_train = X[train_mask], y[train_mask], raw_data_for_sim[train_mask]
+        X_val, y_val, raw_val = X[val_mask], y[val_mask], raw_data_for_sim[val_mask]
+
+        if len(X_train) == 0 or len(X_val) == 0:
+            raise ValueError(
+                f"trainvalmode=3 分割失败: 训练集 {len(X_train)} / 验证集 {len(X_val)}，"
+                f"请调整 --quesplit={args.quesplit}"
+            )
+
+        logger.info(
+            f"queuedSplit数据集构建完成 - 训练集: {len(X_train)} 样本 (queued<{args.quesplit}), "
+            f"验证集: {len(X_val)} 样本 (queued>{args.quesplit})"
+        )
+        logger.info(
+            f"排队车辆数分布 - 训练集: [{nqueued[train_mask].min()}, {nqueued[train_mask].max()}], "
+            f"验证集: [{nqueued[val_mask].min()}, {nqueued[val_mask].max()}]"
+        )
+
     # ===================== 7. 模型训练 =====================
     dt = args.dt or DEFAULT_DT
     logger.info(f"开始模型训练，仿真时间步长: {dt}")
@@ -1836,8 +1869,9 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=int, default=0, help='0(MLP+CF),1(MLP+Regress),2(MLP+预测丢失slot的multlabel),3(丢失slot+vanish时间联合)，4(丢失slot+vanish时间联合回归)')
     parser.add_argument('--fixdata', type=int, default=0, help='0(不修补),1(原始数据补),2(前后车偏移补),3 模型预测修补，前后车偏移补')
     parser.add_argument('--goffset', type=int, default=1, help='仿真全局偏移参数开关')
-    parser.add_argument('--trainvalmode', type=int, default=0, help='0(无丢失,只有vanish),1(有丢失,有misss数据),2(按主车速度v0分割)')
+    parser.add_argument('--trainvalmode', type=int, default=0, help='0(无丢失,只有vanish),1(有丢失,有misss数据),2(按主车速度v0分割),3(按排队车辆数分割)')
     parser.add_argument('--v0split', type=float, default=0, help='trainvalmode=2 时主车速度分割点(m/s)：训练集 v0<v0split，验证集 v0>v0split（开区间）')
+    parser.add_argument('--quesplit', type=int, default=2, help='trainvalmode=3 时排队车辆数分割点：训练集 queued_vehicles<quesplit，验证集 queued_vehicles>quesplit（开区间）')
     
     parser.add_argument('--lambda_veh', type=float, default=0.00000, help='车参数方差正则强度')
     parser.add_argument('--lambda_glo', type=float, default=0.00000, help='全局2参数方差正则强度')
