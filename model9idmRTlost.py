@@ -1377,7 +1377,7 @@ def main(args):
     # ===================== 2. 生成缺失数据样本 =====================
     # ===================== 3. 样本合并与过滤 =====================
     # 选择训练验证模式
-    if args.trainvalmode == 0 | args.trainvalmode == 2:
+    if args.trainvalmode == 0 | args.trainvalmode == 2 | args.trainvalmode == 3:
         df_all = df1
     if args.trainvalmode == 1:
         logger.info("生成缺失车辆样本...")
@@ -1519,7 +1519,7 @@ def main(args):
             f"验证集: {len(X_val)} 样本"
         )
 
-    elif args.trainvalmode == 2:
+    if args.trainvalmode == 2:
         # 按主车速度 v0 分层分割（开区间）：训练集 v0 < v0split，验证集 v0 > v0split
         # 边界 v0 == v0split 的样本被排除，两集严格不重叠
         if args.model not in (0, 1, 4, 5):
@@ -1552,7 +1552,7 @@ def main(args):
             f"验证集: [{v0[val_mask].min():.2f}, {v0[val_mask].max():.2f}]"
         )
 
-    elif args.trainvalmode == 3:
+    if args.trainvalmode == 3:
         # 按主车前面排队车辆数分层分割（开区间）：训练集 queued_vehicles < quesplit，
         # 验证集 queued_vehicles > quesplit，边界 ==quesplit 的样本排除，两集不重叠
         if args.model not in (0, 1, 4, 5):
@@ -1577,7 +1577,7 @@ def main(args):
             )
 
         logger.info(
-            f"queuedSplit数据集构建完成 - 训练集: {len(X_train)} 样本 (queued<{args.quesplit}), "
+            f"queuedSplit数据集构建完成 - 训练集: {len(X_train)} 样本 (queued<={args.quesplit}), "
             f"验证集: {len(X_val)} 样本 (queued>{args.quesplit})"
         )
         logger.info(

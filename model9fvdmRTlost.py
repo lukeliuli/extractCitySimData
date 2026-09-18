@@ -1371,7 +1371,7 @@ def main(args):
     # ===================== 2. 生成缺失数据样本 =====================
     # ===================== 3. 样本合并与过滤 =====================
     # 选择训练验证模式
-    if args.trainvalmode == 0 | args.trainvalmode == 2:
+    if args.trainvalmode == 0 | args.trainvalmode == 2 | args.trainvalmode == 3:
         df_all = df1
     if args.trainvalmode == 1:
         logger.info("生成缺失车辆样本...")
@@ -1510,7 +1510,7 @@ def main(args):
             f"验证集: {len(X_val)} 样本"
         )
 
-    elif args.trainvalmode == 2:
+    if args.trainvalmode == 2:
         # 按主车速度 v0 分层分割（开区间）：训练集 v0 < v0split，验证集 v0 > v0split
         # 边界 v0 == v0split 的样本被排除，两集严格不重叠
         if args.model not in (0, 1, 4, 5):
@@ -1543,8 +1543,8 @@ def main(args):
             f"验证集: [{v0[val_mask].min():.2f}, {v0[val_mask].max():.2f}]"
         )
 
-    elif args.trainvalmode == 3:
-        # 按主车前面排队车辆数分层分割（开区间）：训练集 queued_vehicles < quesplit，
+    if args.trainvalmode == 3:
+        # 按主车前面排队车辆数分层分割（开区间）：训练集 queued_vehicles <= quesplit，
         # 验证集 queued_vehicles > quesplit，边界 ==quesplit 的样本排除，两集不重叠
         if args.model not in (0, 1, 4, 5):
             raise ValueError(
@@ -1555,7 +1555,7 @@ def main(args):
         X, y, raw_data_for_sim = X[mask], y[mask], raw_data_for_sim[mask]
 
         nqueued = df_fixed['queued_vehicles'].values[mask].astype(np.int32)
-        train_mask = nqueued < args.quesplit
+        train_mask = nqueued <= args.quesplit
         val_mask = nqueued > args.quesplit
 
         X_train, y_train, raw_train = X[train_mask], y[train_mask], raw_data_for_sim[train_mask]
@@ -1762,7 +1762,7 @@ if __name__ == "__main__":
     parser.add_argument('--goffset', type=int, default=1, help='仿真全局偏移参数开关')
     parser.add_argument('--trainvalmode', type=int, default=0, help='0(无丢失,只有vanish),1(有丢失,有misss数据),2(按主车速度v0分割),3(按排队车辆数分割)')
     parser.add_argument('--v0split', type=float, default=0.01, help='trainvalmode=2 时主车速度分割点(m/s)：训练集 v0<v0split，验证集 v0>v0split（开区间）')
-    parser.add_argument('--quesplit', type=int, default=2, help='trainvalmode=3 时排队车辆数分割点：训练集 queued_vehicles<quesplit，验证集 queued_vehicles>quesplit（开区间）')
+    parser.add_argument('--quesplit', type=int, default=1, help='trainvalmode=3 时排队车辆数分割点：训练集 queued_vehicles<quesplit，验证集 queued_vehicles>quesplit（开区间）')
 
     args = parser.parse_args()
     main(args)
